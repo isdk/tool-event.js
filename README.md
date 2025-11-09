@@ -51,9 +51,9 @@ graph TD
     B -- 11. emit('my-event', data) --> A;
 ```
 
-1.  **EventClient/EventServer:** These are specialized `ResClientTools`/`ResServerTools` that handle the logic of subscribing, unsubscribing, and publishing events.
-2.  **Transport Layer (`IPubSub...Transport`):** This is the abstraction responsible for the actual communication protocol. The library provides a default `SseServerPubSubTransport` and `SseClientPubSubTransport` for Server-Sent Events. You can create your own transport for WebSockets, IPC, or other protocols.
-3.  **Event Flow:** The client uses `EventClient` to `subscribe` to topics. The transport establishes a connection. When the server's `EventServer` `publishes` an event, the transport delivers it only to subscribed clients.
+1. **EventClient/EventServer:** These are specialized `ResClientTools`/`ResServerTools` that handle the logic of subscribing, unsubscribing, and publishing events.
+2. **Transport Layer (`IPubSub...Transport`):** This is the abstraction responsible for the actual communication protocol. The library provides a default `SseServerPubSubTransport` and `SseClientPubSubTransport` for Server-Sent Events. You can create your own transport for WebSockets, IPC, or other protocols.
+3. **Event Flow:** The client uses `EventClient` to `subscribe` to topics. The transport establishes a connection. When the server's `EventServer` `publishes` an event, the transport delivers it only to subscribed clients.
 
 ## 📦 Installation
 
@@ -163,8 +163,8 @@ main();
 
 ### Step 3: Run the Example
 
-1.  Run the server: `ts-node ./server.ts`
-2.  In a new terminal, run the client: `ts-node ./client.ts`
+1. Run the server: `ts-node ./server.ts`
+2. In a new terminal, run the client: `ts-node ./client.ts`
 
 You will see the client receive time updates from the server every 3 seconds.
 
