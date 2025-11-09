@@ -8,4 +8,4 @@
 
 > `const` **ClientEventPrefix**: `"client:"` = `'client:'`
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/event-server.ts:12](https://github.com/isdk/tool-event.js/blob/97bf967d51a335edb0e7c9a65ca0ff8d5609ccf9/src/event-server.ts#L12)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/event-server.ts:12](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/event-server.ts#L12)

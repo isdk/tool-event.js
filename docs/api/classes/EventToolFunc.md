@@ -6,7 +6,7 @@
 
 # Class: EventToolFunc
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/event.ts:6](https://github.com/isdk/tool-event.js/blob/97bf967d51a335edb0e7c9a65ca0ff8d5609ccf9/src/event.ts#L6)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/event.ts:6](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/event.ts#L6)
 
 ## Extends
 
@@ -52,9 +52,9 @@ Configuration options if not provided in the first argument.
 
 ### \_emitter
 
-> **\_emitter**: `EventEmitter`
+> **\_emitter**: [`EventEmitter`](EventEmitter.md)
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/event.ts:7](https://github.com/isdk/tool-event.js/blob/97bf967d51a335edb0e7c9a65ca0ff8d5609ccf9/src/event.ts#L7)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/event.ts:7](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/event.ts#L7)
 
 ***
 
@@ -193,7 +193,7 @@ mainFunc.register();
 
 > **description**: `string` = `'Return event bus'`
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/event.ts:9](https://github.com/isdk/tool-event.js/blob/97bf967d51a335edb0e7c9a65ca0ff8d5609ccf9/src/event.ts#L9)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/event.ts:9](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/event.ts#L9)
 
 A detailed description of what the function does.
 
@@ -263,7 +263,7 @@ Parameter definitions, which can be an object mapping names to definitions or an
 
 > **result**: `string` = `'event'`
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/event.ts:10](https://github.com/isdk/tool-event.js/blob/97bf967d51a335edb0e7c9a65ca0ff8d5609ccf9/src/event.ts#L10)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/event.ts:10](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/event.ts#L10)
 
 The expected return type of the function, described as a string or a JSON schema object.
 
@@ -428,13 +428,13 @@ A static registry of all `ToolFunc` instances, indexed by name.
 
 #### Get Signature
 
-> **get** **emitter**(): `EventEmitter`
+> **get** **emitter**(): [`EventEmitter`](EventEmitter.md)
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/event.ts:12](https://github.com/isdk/tool-event.js/blob/97bf967d51a335edb0e7c9a65ca0ff8d5609ccf9/src/event.ts#L12)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/event.ts:12](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/event.ts#L12)
 
 ##### Returns
 
-`EventEmitter`
+[`EventEmitter`](EventEmitter.md)
 
 ## Methods
 
@@ -751,15 +751,15 @@ the dest object.
 
 ### func()
 
-> **func**(): `EventEmitter`
+> **func**(): [`EventEmitter`](EventEmitter.md)
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/event.ts:16](https://github.com/isdk/tool-event.js/blob/97bf967d51a335edb0e7c9a65ca0ff8d5609ccf9/src/event.ts#L16)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/event.ts:16](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/event.ts#L16)
 
 The actual function implementation.
 
 #### Returns
 
-`EventEmitter`
+[`EventEmitter`](EventEmitter.md)
 
 The result of the function.
 

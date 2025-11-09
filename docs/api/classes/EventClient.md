@@ -6,7 +6,7 @@
 
 # Class: EventClient
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/event-client.ts:15](https://github.com/isdk/tool-event.js/blob/97bf967d51a335edb0e7c9a65ca0ff8d5609ccf9/src/event-client.ts#L15)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/event-client.ts:15](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/event-client.ts#L15)
 
 ## Extends
 
@@ -54,7 +54,7 @@ Configuration options if not provided in the first argument.
 
 > **\_forwardEvents**: `Set`\<`string`\>
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/event-client.ts:34](https://github.com/isdk/tool-event.js/blob/97bf967d51a335edb0e7c9a65ca0ff8d5609ccf9/src/event-client.ts#L34)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/event-client.ts:34](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/event-client.ts#L34)
 
 ***
 
@@ -62,7 +62,7 @@ Defined in: [@isdk/ai-tools/packages/tool-event/src/event-client.ts:34](https://
 
 > **\_sseListeners**: `Record`\<`string`, (`data`, `ctx?`) => `void`\> = `{}`
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/event-client.ts:33](https://github.com/isdk/tool-event.js/blob/97bf967d51a335edb0e7c9a65ca0ff8d5609ccf9/src/event-client.ts#L33)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/event-client.ts:33](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/event-client.ts#L33)
 
 ***
 
@@ -70,7 +70,7 @@ Defined in: [@isdk/ai-tools/packages/tool-event/src/event-client.ts:33](https://
 
 > **\_stream**: `undefined` \| [`PubSubClientStream`](../interfaces/PubSubClientStream.md)
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/event-client.ts:30](https://github.com/isdk/tool-event.js/blob/97bf967d51a335edb0e7c9a65ca0ff8d5609ccf9/src/event-client.ts#L30)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/event-client.ts:30](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/event-client.ts#L30)
 
 ***
 
@@ -78,7 +78,7 @@ Defined in: [@isdk/ai-tools/packages/tool-event/src/event-client.ts:30](https://
 
 > **\_streamEvents**: `undefined` \| `string`[]
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/event-client.ts:31](https://github.com/isdk/tool-event.js/blob/97bf967d51a335edb0e7c9a65ca0ff8d5609ccf9/src/event-client.ts#L31)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/event-client.ts:31](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/event-client.ts#L31)
 
 ***
 
@@ -232,7 +232,7 @@ mainFunc.register();
 
 > **description**: `string` = `'subscribe server event'`
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/event-client.ts:62](https://github.com/isdk/tool-event.js/blob/97bf967d51a335edb0e7c9a65ca0ff8d5609ccf9/src/event-client.ts#L62)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/event-client.ts:62](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/event-client.ts#L62)
 
 A detailed description of what the function does.
 
@@ -246,7 +246,7 @@ A detailed description of what the function does.
 
 > **ebListener**: (`this`, ...`args`) => `Promise`\<`void`\>
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/event-client.ts:102](https://github.com/isdk/tool-event.js/blob/97bf967d51a335edb0e7c9a65ca0ff8d5609ccf9/src/event-client.ts#L102)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/event-client.ts:102](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/event-client.ts#L102)
 
 #### Parameters
 
@@ -455,7 +455,7 @@ A concise, human-readable title for the function, often used in UI or by AI.
 
 > `static` **\_pubSubTransport**: `undefined` \| [`IPubSubClientTransport`](../interfaces/IPubSubClientTransport.md)
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/event-client.ts:16](https://github.com/isdk/tool-event.js/blob/97bf967d51a335edb0e7c9a65ca0ff8d5609ccf9/src/event-client.ts#L16)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/event-client.ts:16](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/event-client.ts#L16)
 
 ***
 
@@ -525,7 +525,7 @@ A static registry of all `ToolFunc` instances, indexed by name.
 
 > **get** **active**(): `boolean`
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/event-client.ts:48](https://github.com/isdk/tool-event.js/blob/97bf967d51a335edb0e7c9a65ca0ff8d5609ccf9/src/event-client.ts#L48)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/event-client.ts:48](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/event-client.ts#L48)
 
 ##### Returns
 
@@ -560,7 +560,7 @@ This is used as the base for constructing request URLs.
 
 > **get** **clientId**(): `undefined` \| `string`
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/event-client.ts:36](https://github.com/isdk/tool-event.js/blob/97bf967d51a335edb0e7c9a65ca0ff8d5609ccf9/src/event-client.ts#L36)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/event-client.ts:36](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/event-client.ts#L36)
 
 ##### Returns
 
@@ -595,7 +595,7 @@ This is used as the base for constructing request URLs.
 
 > **get** `static` **pubSubTransport**(): [`IPubSubClientTransport`](../interfaces/IPubSubClientTransport.md)
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/event-client.ts:25](https://github.com/isdk/tool-event.js/blob/97bf967d51a335edb0e7c9a65ca0ff8d5609ccf9/src/event-client.ts#L25)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/event-client.ts:25](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/event-client.ts#L25)
 
 ##### Returns
 
@@ -930,7 +930,7 @@ the new dest object
 
 > **close**(): `void`
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/event-client.ts:212](https://github.com/isdk/tool-event.js/blob/97bf967d51a335edb0e7c9a65ca0ff8d5609ccf9/src/event-client.ts#L212)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/event-client.ts:212](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/event-client.ts#L212)
 
 #### Returns
 
@@ -990,7 +990,7 @@ Defined in: @isdk/ai-tools/packages/tool-rpc/dist/index.d.ts:54
 
 > **esListener**(`evtType`, `data`, `ctx?`): `void`
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/event-client.ts:91](https://github.com/isdk/tool-event.js/blob/97bf967d51a335edb0e7c9a65ca0ff8d5609ccf9/src/event-client.ts#L91)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/event-client.ts:91](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/event-client.ts#L91)
 
 #### Parameters
 
@@ -1078,7 +1078,7 @@ Defined in: @isdk/ai-tools/packages/tool-rpc/dist/index.d.ts:58
 
 > **forwardEvent**(`events`): `void`
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/event-client.ts:173](https://github.com/isdk/tool-event.js/blob/97bf967d51a335edb0e7c9a65ca0ff8d5609ccf9/src/event-client.ts#L173)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/event-client.ts:173](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/event-client.ts#L173)
 
 forward local event(s) to server
 
@@ -1152,7 +1152,7 @@ Defined in: @isdk/ai-tools/packages/tool-rpc/dist/index.d.ts:51
 
 > **getEvtSource**(): `Promise`\<[`PubSubClientStream`](../interfaces/PubSubClientStream.md)\>
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/event-client.ts:40](https://github.com/isdk/tool-event.js/blob/97bf967d51a335edb0e7c9a65ca0ff8d5609ccf9/src/event-client.ts#L40)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/event-client.ts:40](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/event-client.ts#L40)
 
 #### Returns
 
@@ -1298,7 +1298,7 @@ A property name.
 
 > **init**(`events`): `Promise`\<`any`\>
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/event-client.ts:205](https://github.com/isdk/tool-event.js/blob/97bf967d51a335edb0e7c9a65ca0ff8d5609ccf9/src/event-client.ts#L205)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/event-client.ts:205](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/event-client.ts#L205)
 
 #### Parameters
 
@@ -1316,7 +1316,7 @@ Defined in: [@isdk/ai-tools/packages/tool-event/src/event-client.ts:205](https:/
 
 > **initEventStream**(`events?`): `Promise`\<[`PubSubClientStream`](../interfaces/PubSubClientStream.md)\>
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/event-client.ts:64](https://github.com/isdk/tool-event.js/blob/97bf967d51a335edb0e7c9a65ca0ff8d5609ccf9/src/event-client.ts#L64)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/event-client.ts:64](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/event-client.ts#L64)
 
 #### Parameters
 
@@ -1882,7 +1882,7 @@ The result of the function execution.
 
 > **setActive**(`v`): `Promise`\<`void`\>
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/event-client.ts:52](https://github.com/isdk/tool-event.js/blob/97bf967d51a335edb0e7c9a65ca0ff8d5609ccf9/src/event-client.ts#L52)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/event-client.ts:52](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/event-client.ts#L52)
 
 #### Parameters
 
@@ -1900,7 +1900,7 @@ Defined in: [@isdk/ai-tools/packages/tool-event/src/event-client.ts:52](https://
 
 > **subscribe**(`events`): `Promise`\<`any`\>
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/event-client.ts:127](https://github.com/isdk/tool-event.js/blob/97bf967d51a335edb0e7c9a65ca0ff8d5609ccf9/src/event-client.ts#L127)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/event-client.ts:127](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/event-client.ts#L127)
 
 subscribe server event
 
@@ -1998,7 +1998,7 @@ Returns a string representation of an object.
 
 > **unforwardEvent**(`events`): `void`
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/event-client.ts:193](https://github.com/isdk/tool-event.js/blob/97bf967d51a335edb0e7c9a65ca0ff8d5609ccf9/src/event-client.ts#L193)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/event-client.ts:193](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/event-client.ts#L193)
 
 unforward local event(s) to server
 
@@ -2042,7 +2042,7 @@ The instance that was unregistered.
 
 > **unsubscribe**(`events`): `Promise`\<`any`\>
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/event-client.ts:149](https://github.com/isdk/tool-event.js/blob/97bf967d51a335edb0e7c9a65ca0ff8d5609ccf9/src/event-client.ts#L149)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/event-client.ts:149](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/event-client.ts#L149)
 
 unsubscribe server event
 
@@ -3588,7 +3588,7 @@ The value of the new prototype or null.
 
 > `static` **setPubSubTransport**(`t?`): `void`
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/event-client.ts:18](https://github.com/isdk/tool-event.js/blob/97bf967d51a335edb0e7c9a65ca0ff8d5609ccf9/src/event-client.ts#L18)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/event-client.ts:18](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/event-client.ts#L18)
 
 #### Parameters
 

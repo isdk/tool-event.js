@@ -6,7 +6,7 @@
 
 # Interface: EventServerFuncParams
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/event-server.ts:14](https://github.com/isdk/tool-event.js/blob/97bf967d51a335edb0e7c9a65ca0ff8d5609ccf9/src/event-server.ts#L14)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/event-server.ts:14](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/event-server.ts#L14)
 
 ## Extends
 
@@ -50,7 +50,7 @@ The underlying response or reply object from the transport layer (e.g., `ServerR
 
 > `optional` **act**: `"sub"` \| `"pub"` \| `"unsub"`
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/event-server.ts:17](https://github.com/isdk/tool-event.js/blob/97bf967d51a335edb0e7c9a65ca0ff8d5609ccf9/src/event-server.ts#L17)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/event-server.ts:17](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/event-server.ts#L17)
 
 ***
 
@@ -58,7 +58,7 @@ Defined in: [@isdk/ai-tools/packages/tool-event/src/event-server.ts:17](https://
 
 > `optional` **clientId**: `string`
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/event-server.ts:18](https://github.com/isdk/tool-event.js/blob/97bf967d51a335edb0e7c9a65ca0ff8d5609ccf9/src/event-server.ts#L18)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/event-server.ts:18](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/event-server.ts#L18)
 
 ***
 
@@ -66,7 +66,7 @@ Defined in: [@isdk/ai-tools/packages/tool-event/src/event-server.ts:18](https://
 
 > `optional` **data**: `any`
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/event-server.ts:16](https://github.com/isdk/tool-event.js/blob/97bf967d51a335edb0e7c9a65ca0ff8d5609ccf9/src/event-server.ts#L16)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/event-server.ts:16](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/event-server.ts#L16)
 
 ***
 
@@ -74,4 +74,4 @@ Defined in: [@isdk/ai-tools/packages/tool-event/src/event-server.ts:16](https://
 
 > `optional` **event**: `string` \| `string`[]
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/event-server.ts:15](https://github.com/isdk/tool-event.js/blob/97bf967d51a335edb0e7c9a65ca0ff8d5609ccf9/src/event-server.ts#L15)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/event-server.ts:15](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/event-server.ts#L15)

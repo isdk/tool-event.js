@@ -6,7 +6,7 @@
 
 # Class: EventServer
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/event-server.ts:21](https://github.com/isdk/tool-event.js/blob/97bf967d51a335edb0e7c9a65ca0ff8d5609ccf9/src/event-server.ts#L21)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/event-server.ts:21](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/event-server.ts#L21)
 
 ## Extends
 
@@ -189,7 +189,7 @@ The default options for export and assign
 
 > **depends**: `object`
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/event-server.ts:44](https://github.com/isdk/tool-event.js/blob/97bf967d51a335edb0e7c9a65ca0ff8d5609ccf9/src/event-server.ts#L44)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/event-server.ts:44](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/event-server.ts#L44)
 
 A map of dependencies this function has on other tool functions.
 Declaring dependencies ensures that they are automatically registered when this function is registered.
@@ -228,7 +228,7 @@ mainFunc.register();
 
 > **description**: `string` = `'subscribe server event'`
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/event-server.ts:42](https://github.com/isdk/tool-event.js/blob/97bf967d51a335edb0e7c9a65ca0ff8d5609ccf9/src/event-server.ts#L42)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/event-server.ts:42](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/event-server.ts#L42)
 
 A detailed description of what the function does.
 
@@ -322,7 +322,7 @@ Defined in: @isdk/ai-tools/packages/tool-rpc/dist/index.d.ts:75
 
 > **result**: `string` = `'event'`
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/event-server.ts:43](https://github.com/isdk/tool-event.js/blob/97bf967d51a335edb0e7c9a65ca0ff8d5609ccf9/src/event-server.ts#L43)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/event-server.ts:43](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/event-server.ts#L43)
 
 The expected return type of the function, described as a string or a JSON schema object.
 
@@ -439,7 +439,7 @@ A concise, human-readable title for the function, often used in UI or by AI.
 
 > `static` **\_pubSubTransport**: `undefined` \| [`IPubSubServerTransport`](../interfaces/IPubSubServerTransport.md)
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/event-server.ts:30](https://github.com/isdk/tool-event.js/blob/97bf967d51a335edb0e7c9a65ca0ff8d5609ccf9/src/event-server.ts#L30)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/event-server.ts:30](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/event-server.ts#L30)
 
 ***
 
@@ -465,7 +465,7 @@ A static map of aliases to their corresponding function names.
 
 > `static` **autoInjectToLocalBus**: `boolean` = `false`
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/event-server.ts:26](https://github.com/isdk/tool-event.js/blob/97bf967d51a335edb0e7c9a65ca0ff8d5609ccf9/src/event-server.ts#L26)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/event-server.ts:26](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/event-server.ts#L26)
 
 Controls whether the client-published events are auto-emitted on server's localBus.
 Defaults to false for security. Must be explicitly enabled for 'client:' prefixed events to be emitted.
@@ -520,7 +520,7 @@ Defined in: @isdk/ai-tools/packages/tool-rpc/dist/index.d.ts:73
 
 > **get** **pubSubTransport**(): `undefined` \| [`IPubSubServerTransport`](../interfaces/IPubSubServerTransport.md)
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/event-server.ts:46](https://github.com/isdk/tool-event.js/blob/97bf967d51a335edb0e7c9a65ca0ff8d5609ccf9/src/event-server.ts#L46)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/event-server.ts:46](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/event-server.ts#L46)
 
 ##### Returns
 
@@ -572,7 +572,7 @@ The conventional root path for the API endpoint.
 
 > **get** `static` **pubSubTransport**(): `undefined` \| [`IPubSubServerTransport`](../interfaces/IPubSubServerTransport.md)
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/event-server.ts:32](https://github.com/isdk/tool-event.js/blob/97bf967d51a335edb0e7c9a65ca0ff8d5609ccf9/src/event-server.ts#L32)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/event-server.ts:32](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/event-server.ts#L32)
 
 ##### Returns
 
@@ -584,7 +584,7 @@ Defined in: [@isdk/ai-tools/packages/tool-event/src/event-server.ts:32](https://
 
 > **$publish**(`__namedParameters`): `object`
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/event-server.ts:163](https://github.com/isdk/tool-event.js/blob/97bf967d51a335edb0e7c9a65ca0ff8d5609ccf9/src/event-server.ts#L163)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/event-server.ts:163](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/event-server.ts#L163)
 
 #### Parameters
 
@@ -610,7 +610,7 @@ Defined in: [@isdk/ai-tools/packages/tool-event/src/event-server.ts:163](https:/
 
 > **$sub**(`__namedParameters`): \{ `clientId`: `any`; `event`: `string` \| `string`[]; `forward`: `boolean`; `subscribed`: `boolean`; \} \| \{ `clientId?`: `undefined`; `event`: `string` \| `string`[]; `forward`: `boolean`; `subscribed?`: `undefined`; \}
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/event-server.ts:109](https://github.com/isdk/tool-event.js/blob/97bf967d51a335edb0e7c9a65ca0ff8d5609ccf9/src/event-server.ts#L109)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/event-server.ts:109](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/event-server.ts#L109)
 
 #### Parameters
 
@@ -628,7 +628,7 @@ Defined in: [@isdk/ai-tools/packages/tool-event/src/event-server.ts:109](https:/
 
 > **$unsub**(`__namedParameters`): \{ `clientId`: `any`; `event`: `string` \| `string`[]; `forward`: `boolean`; `subscribed`: `boolean`; \} \| \{ `clientId?`: `undefined`; `event`: `string` \| `string`[]; `forward`: `boolean`; `subscribed?`: `undefined`; \}
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/event-server.ts:136](https://github.com/isdk/tool-event.js/blob/97bf967d51a335edb0e7c9a65ca0ff8d5609ccf9/src/event-server.ts#L136)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/event-server.ts:136](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/event-server.ts#L136)
 
 #### Parameters
 
@@ -1027,7 +1027,7 @@ the dest object.
 
 > **forward**(`events`): `void`
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/event-server.ts:72](https://github.com/isdk/tool-event.js/blob/97bf967d51a335edb0e7c9a65ca0ff8d5609ccf9/src/event-server.ts#L72)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/event-server.ts:72](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/event-server.ts#L72)
 
 #### Parameters
 
@@ -1356,7 +1356,7 @@ The source object
 
 > **isStream**(`params`): `boolean`
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/event-server.ts:192](https://github.com/isdk/tool-event.js/blob/97bf967d51a335edb0e7c9a65ca0ff8d5609ccf9/src/event-server.ts#L192)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/event-server.ts:192](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/event-server.ts#L192)
 
 Determines if a function call should produce a stream.
 
@@ -1390,7 +1390,7 @@ The runtime parameters passed to the function call.
 
 > **list**(`__namedParameters`): [`PubSubServerSession`](../interfaces/PubSubServerSession.md)
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/event-server.ts:101](https://github.com/isdk/tool-event.js/blob/97bf967d51a335edb0e7c9a65ca0ff8d5609ccf9/src/event-server.ts#L101)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/event-server.ts:101](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/event-server.ts#L101)
 
 #### Parameters
 
@@ -1521,7 +1521,7 @@ A property name.
 
 > **publishServerEvent**(`event`, `data`): `any`
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/event-server.ts:67](https://github.com/isdk/tool-event.js/blob/97bf967d51a335edb0e7c9a65ca0ff8d5609ccf9/src/event-server.ts#L67)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/event-server.ts:67](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/event-server.ts#L67)
 
 #### Parameters
 
@@ -1936,7 +1936,7 @@ Returns a string representation of an object.
 
 > **unforward**(`events`): `void`
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/event-server.ts:89](https://github.com/isdk/tool-event.js/blob/97bf967d51a335edb0e7c9a65ca0ff8d5609ccf9/src/event-server.ts#L89)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/event-server.ts:89](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/event-server.ts#L89)
 
 #### Parameters
 
@@ -1992,7 +1992,7 @@ Returns the primitive value of the specified object.
 
 > `static` **alreadyForward**(`event`): `undefined` \| `true`
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/event-server.ts:60](https://github.com/isdk/tool-event.js/blob/97bf967d51a335edb0e7c9a65ca0ff8d5609ccf9/src/event-server.ts#L60)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/event-server.ts:60](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/event-server.ts#L60)
 
 #### Parameters
 
@@ -2332,7 +2332,7 @@ Descriptor for the property. It can be for a data property or an accessor proper
 
 > `static` **ebListener**(`eventType`, ...`data`): `void`
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/event-server.ts:56](https://github.com/isdk/tool-event.js/blob/97bf967d51a335edb0e7c9a65ca0ff8d5609ccf9/src/event-server.ts#L56)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/event-server.ts:56](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/event-server.ts#L56)
 
 #### Parameters
 
@@ -3142,7 +3142,7 @@ Object to make non-extensible.
 
 > `static` **publish**(`event`, `data`, `target?`): `undefined` \| `void`
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/event-server.ts:50](https://github.com/isdk/tool-event.js/blob/97bf967d51a335edb0e7c9a65ca0ff8d5609ccf9/src/event-server.ts#L50)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/event-server.ts:50](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/event-server.ts#L50)
 
 #### Parameters
 
@@ -3508,7 +3508,7 @@ The value of the new prototype or null.
 
 > `static` **setPubSubTransport**(`t?`): `void`
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/event-server.ts:31](https://github.com/isdk/tool-event.js/blob/97bf967d51a335edb0e7c9a65ca0ff8d5609ccf9/src/event-server.ts#L31)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/event-server.ts:31](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/event-server.ts#L31)
 
 #### Parameters
 

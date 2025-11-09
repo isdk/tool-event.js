@@ -6,7 +6,7 @@
 
 # Interface: EventClientFuncParams
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/event-client.ts:8](https://github.com/isdk/tool-event.js/blob/97bf967d51a335edb0e7c9a65ca0ff8d5609ccf9/src/event-client.ts#L8)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/event-client.ts:8](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/event-client.ts#L8)
 
 ## Properties
 
@@ -14,7 +14,7 @@ Defined in: [@isdk/ai-tools/packages/tool-event/src/event-client.ts:8](https://g
 
 > `optional` **act**: `"sub"` \| `"pub"` \| `"unsub"` \| `"init"`
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/event-client.ts:11](https://github.com/isdk/tool-event.js/blob/97bf967d51a335edb0e7c9a65ca0ff8d5609ccf9/src/event-client.ts#L11)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/event-client.ts:11](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/event-client.ts#L11)
 
 ***
 
@@ -22,7 +22,7 @@ Defined in: [@isdk/ai-tools/packages/tool-event/src/event-client.ts:11](https://
 
 > `optional` **data**: `any`
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/event-client.ts:10](https://github.com/isdk/tool-event.js/blob/97bf967d51a335edb0e7c9a65ca0ff8d5609ccf9/src/event-client.ts#L10)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/event-client.ts:10](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/event-client.ts#L10)
 
 ***
 
@@ -30,7 +30,7 @@ Defined in: [@isdk/ai-tools/packages/tool-event/src/event-client.ts:10](https://
 
 > `optional` **event**: `string` \| `string`[]
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/event-client.ts:9](https://github.com/isdk/tool-event.js/blob/97bf967d51a335edb0e7c9a65ca0ff8d5609ccf9/src/event-client.ts#L9)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/event-client.ts:9](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/event-client.ts#L9)
 
 ***
 
@@ -38,7 +38,7 @@ Defined in: [@isdk/ai-tools/packages/tool-event/src/event-client.ts:9](https://g
 
 > `optional` **listener**: (...`args`) => `void`
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/event-client.ts:12](https://github.com/isdk/tool-event.js/blob/97bf967d51a335edb0e7c9a65ca0ff8d5609ccf9/src/event-client.ts#L12)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/event-client.ts:12](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/event-client.ts#L12)
 
 #### Parameters
 

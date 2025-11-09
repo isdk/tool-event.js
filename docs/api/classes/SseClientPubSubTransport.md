@@ -6,7 +6,7 @@
 
 # Class: SseClientPubSubTransport
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/transports/pubsub/sse-client.ts:5](https://github.com/isdk/tool-event.js/blob/97bf967d51a335edb0e7c9a65ca0ff8d5609ccf9/src/transports/pubsub/sse-client.ts#L5)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/transports/pubsub/sse-client.ts:5](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/transports/pubsub/sse-client.ts#L5)
 
 Defines the interface for a client-side PubSub transport.
 
@@ -33,7 +33,7 @@ stream (`PubSubClientStream`) to the server.
 
 > **connect**(`url`, `params?`): `Promise`\<[`PubSubClientStream`](../interfaces/PubSubClientStream.md)\>
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/transports/pubsub/sse-client.ts:12](https://github.com/isdk/tool-event.js/blob/97bf967d51a335edb0e7c9a65ca0ff8d5609ccf9/src/transports/pubsub/sse-client.ts#L12)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/transports/pubsub/sse-client.ts:12](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/transports/pubsub/sse-client.ts#L12)
 
 Establishes a connection to a server endpoint.
 
@@ -68,7 +68,7 @@ A `PubSubClientStream` instance that represents the active connection.
 
 > **disconnect**(`stream`): `void`
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/transports/pubsub/sse-client.ts:80](https://github.com/isdk/tool-event.js/blob/97bf967d51a335edb0e7c9a65ca0ff8d5609ccf9/src/transports/pubsub/sse-client.ts#L80)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/transports/pubsub/sse-client.ts:80](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/transports/pubsub/sse-client.ts#L80)
 
 Optional. Disconnects a given stream.
 While the `close` method exists on the stream itself, placing `disconnect`
@@ -97,7 +97,7 @@ The stream to disconnect.
 
 > **setApiRoot**(`apiRoot`): `void`
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/transports/pubsub/sse-client.ts:8](https://github.com/isdk/tool-event.js/blob/97bf967d51a335edb0e7c9a65ca0ff8d5609ccf9/src/transports/pubsub/sse-client.ts#L8)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/transports/pubsub/sse-client.ts:8](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/transports/pubsub/sse-client.ts#L8)
 
 Optional. Configures the transport with a base URL.
 If implemented, this allows the transport to resolve relative paths
