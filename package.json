@@ -1,0 +1,103 @@
+{
+  "name": "@isdk/tool-event",
+  "version": "0.1.0",
+  "description": "Event-driven and PubSub communication tool based on @isdk/tool-func and @isdk/tool-rpc.",
+  "author": "Riceball LEE <snowyu.lee@gmail.com>",
+  "license": "MIT",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "require": "./dist/index.js",
+      "import": "./dist/index.mjs"
+    },
+    "./transports/pubsub": {
+      "types": "./dist/transports/pubsub.d.ts",
+      "require": "./dist/transports/pubsub.js",
+      "import": "./dist/transports/pubsub.mjs"
+    }
+  },
+  "files": [
+    "docs",
+    "dist"
+  ],
+  "engines": {
+    "node": ">=20.11.1"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "@isdk/common-error": "^0.2.0",
+    "@isdk/hash": "workspace:^",
+    "@isdk/tool-func": "workspace:^",
+    "@isdk/tool-rpc": "workspace:^",
+    "events-ex": "^2.1.1",
+    "eventsource-parser": "^3.0.6",
+    "lodash-es": "^4.17.21",
+    "nanoid": "^5.1.5",
+    "uuid": "^11.1.0",
+    "custom-ability": "^2.0.1"
+  },
+  "devDependencies": {
+    "@antfu/eslint-config": "^4.10.1",
+    "@types/jest": "^29.5.14",
+    "@types/lodash-es": "^4.17.12",
+    "@types/node": "^24.3.0",
+    "@typescript-eslint/eslint-plugin": "~8.41.0",
+    "esbuild-plugin-wasm": "^1.1.0",
+    "eslint": "^9.34.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-tsdoc": "^0.4.0",
+    "eventsource": "^4.0.0",
+    "fastify": "^5.6.0",
+    "prettier": "^3.6.2",
+    "terser": "^5.44.0",
+    "tsup": "^8.5.0",
+    "tsx": "^4.20.5",
+    "type-fest": "^4.41.0",
+    "typedoc": "^0.28.13",
+    "typedoc-plugin-markdown": "^4.8.1",
+    "typescript": "~5.7.3",
+    "vite": "^7.1.4",
+    "vite-plugin-wasm": "^3.5.0",
+    "vitest": "^3.2.4"
+  },
+  "bug": "https://github.com/isdk/tool-events.js/issues",
+  "homepage": "https://github.com/isdk/tool-events.js/#readme",
+  "keywords": [
+    "remote procedure call",
+    "microservice",
+    "ai-tools",
+    "tool-function",
+    "function-calling",
+    "ai-agent",
+    "modular",
+    "registry",
+    "async",
+    "stream",
+    "cancellable",
+    "isdk"
+  ],
+  "maintainers": [
+    "Riceball LEE <snowyu.lee@gmail.com>"
+  ],
+  "scripts": {
+    "build-fast": "tsup",
+    "build": "pnpm run build-fast --dts-resolve --dts && pnpm run doc:md",
+    "clean": "rm -fr docs/api web dist",
+    "doc": "typedoc --plugin none --out web",
+    "doc:md": "typedoc --plugin typedoc-plugin-markdown --out docs/api",
+    "style": "pnpm run format -c && pnpm run lint",
+    "style:fix": "pnpm run format:fix && npm run lint:fix",
+    "format": "prettier \"**/*.{ts,tsx,js,jsx,css,scss,sass,less,md}\"",
+    "format:fix": "pnpm run format --write",
+    "lint": "eslint .",
+    "lint:fix": "pnpm run lint --fix",
+    "test": "FORCE_COLOR=1 vitest run",
+    "release": "pnpm run clean && pnpm run build && git add -f docs/api && git ci -m 'docs: update API docs' && pnpm dlx commit-and-tag-version -s",
+    "release.alpha": "npm run release -- --prerelease alpha"
+  }
+}
