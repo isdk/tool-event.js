@@ -1,6 +1,6 @@
 {
   "name": "@isdk/tool-event",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Brings powerful, real-time, bidirectional event communication to the @isdk/tool-rpc ecosystem. Seamlessly integrates a publish/subscribe model into the familiar RPC/RESTful architecture.",
   "author": "Riceball LEE <snowyu.lee@gmail.com>",
   "license": "MIT",
