@@ -4,7 +4,7 @@
 
 Its core design philosophy is to **seamlessly integrate a publish/subscribe model into the familiar RPC/RESTful architecture you already use**. Instead of manually managing a separate WebSocket or SSE connection, you treat real-time events as just another "tool" that is discoverable and callable through the standard `tool-rpc` framework. This approach dramatically simplifies the complexity of building interactive AI agents, live data dashboards, notification systems, and any application requiring real-time updates.
 
-In short, `@isdk/tool-event` lets you handle all remote communication—whether it's a regular RPC or a real-time event stream—in a unified and simple way.
+In short, `@isdk/tool-event` allows you to handle all events in a unified and simple way, whether they are events on remote services or local events.
 
 This package is built upon `@isdk/tool-func` and `@isdk/tool-rpc`. Please ensure you are familiar with their core concepts before proceeding.
 
@@ -405,6 +405,107 @@ EventServer.setPubSubTransport(wsTransport); // New
 ```
 
 This way, your core business logic in `EventServer` remains completely decoupled from the underlying communication protocol.
+
+### 6. Simplifying Backend Event Handling with `backendEventable`
+
+For a more integrated, object-oriented approach to events, `@isdk/tool-event` provides a powerful `backendEventable` utility. Instead of calling the static `EventServer.publish()` method from anywhere, you can make your classes first-class event citizens.
+
+The `backendEventable` function is a decorator that injects event capabilities (`on`, `emit`, `once`, etc.) directly into a class's prototype. This allows instances of that class to interact with the shared event bus using a familiar `this.emit()` and `this.on()` syntax.
+
+This is particularly useful for:
+
+- Making `EventServer` itself capable of emitting its own lifecycle events.
+- Allowing any backend service (that extends `ToolFunc`) to easily publish or subscribe to events without needing a direct reference to the event bus.
+- **Enhancing `EventClient` to act as a powerful local event bus that is also connected to the server and other clients.**
+
+**How to use `backendEventable`:**
+
+In your application's main setup file, you can enhance the classes you want to make event-aware. This is typically done once when your application starts.
+
+```typescript
+// --- In your application's main setup file (e.g., server.ts or client.ts) ---
+import { EventServer, EventClient, backendEventable, EventBusName } from '@isdk/tool-event';
+import { ToolFunc, ClientTools } from '@isdk/tool-func';
+import { event } from 'events-ex';
+
+// 1. Enhance the EventServer class itself to be event-aware.
+// This "patches" the class, so any instance of EventServer can now use `this.emit()`.
+backendEventable(EventServer);
+
+// 2. Enhance the EventClient class to be event-aware.
+// This makes EventClient instances a powerful local event bus connected to the server.
+const EventBusClientName = 'event-bus-client'; // As seen in test/event-server.test.ts
+backendEventable(EventClient, { eventBusName: EventBusClientName });
+
+
+// (Optional) Enhance a custom service class
+class MyCustomService extends ToolFunc {
+  name = 'my-service';
+  doSomething() {
+    console.log('[MyService] Doing something and emitting an event.');
+    this.emit('my-service-event', { info: 'Something important happened' });
+  }
+}
+backendEventable(MyCustomService);
+
+
+// --- Later, during server initialization (server.ts) ---
+
+async function startServer() {
+  // Set up the shared event bus (one-time setup).
+  const eventBus = event.runSync();
+  new ToolFunc(EventBusName, { tools: { emitter: eventBus } }).register();
+
+  // Instantiate your enhanced classes.
+  const eventTool = new EventServer('event');
+  eventTool.register();
+
+  const myService = new MyCustomService();
+  myService.register();
+
+  // Now, instances can communicate via the event bus.
+  // Listen for the custom service event on the EventServer instance.
+  eventTool.on('my-service-event', (data) => {
+    console.log('EventServer instance caught event from MyCustomService:', data);
+    // You could then forward this to clients if needed:
+    // eventTool.publish('event-for-client', data);
+  });
+
+  // Trigger the method that emits the event.
+  myService.doSomething();
+
+  // You can also still use the static publish method, which uses the same bus.
+  EventServer.publish('another-event', { from: 'static call' });
+}
+
+// startServer(); // Commented out for client-side example clarity
+
+
+// --- Later, during client initialization (client.ts) ---
+
+async function startClient() {
+  // Set up the client-side event bus (one-time setup).
+  const clientEventBus = event.runSync();
+  new ToolFunc(EventBusClientName, { tools: { emitter: clientEventBus } }).register();
+
+  // Register EventClient with ClientTools (as seen in test/event-server.test.ts)
+  const event4Client = new EventClient('event');
+  ClientTools.register(event4Client);
+
+  // Now, the EventClient instance can use `this.emit()` and `this.on()`
+  // to interact with its local event bus, which is also connected to the server.
+  event4Client.on('server-time', (data) => {
+    console.log('[Client] Received server-time via EventClient instance:', data);
+  });
+
+  // Example: Emit a local client event that can be forwarded to the server
+  event4Client.emit('local-client-event', { action: 'user-clicked' });
+}
+
+// startClient(); // Commented out for server-side example clarity
+```
+
+This pattern promotes a cleaner, more decoupled architecture where different parts of your system can communicate through events without being tightly bound to each other.
 
 ## 🤝 Contributing
 

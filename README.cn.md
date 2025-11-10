@@ -4,7 +4,7 @@
 
 它的核心设计理念是**将发布/订阅模型无缝地集成到您已经熟悉的 RPC/RESTful 架构中**。您无需再手动管理独立的 WebSocket 或 SSE 连接，而是将实时事件视为另一种“工具”，它可以通过标准的 `tool-rpc` 框架被发现和调用。这种方法极大地简化了构建交互式 AI 代理、实时数据仪表盘、通知系统以及任何需要实时更新的应用的复杂性。
 
-简而言之, `@isdk/tool-event` 让您用统一、简单的方式处理所有远程调用——无论是常规的 RPC 还是实时的事件流。
+简而言之, `@isdk/tool-event` 让您用统一、简单的方式处理所有的事件，无论是远程服务上的事件，还是本地事件。
 
 本项目基于 `@isdk/tool-func` 和 `@isdk/tool-rpc` 构建。在继续之前，请确保您已熟悉它们的核心概念。
 
@@ -25,12 +25,12 @@
 graph TD
     subgraph 客户端
         A[你的应用] --> B[EventClient];
-        B -- 使用 --> C[IPubSubClientTransport (例如, SseClientPubSubTransport)];
+        B -- 使用 --> C[IPubSubClientTransport<br/>（例,SseClientPubSubTransport）];
     end
 
     subgraph 服务器端
-        G[EventServer] --> H[IPubSubServerTransport (例如, SseServerPubSubTransport)];
-        H -- 管理 --> I[底层协议 (SSE, WebSocket, 等)];
+        G[EventServer] --> H[IPubSubServerTransport<br/>（例,SseServerPubSubTransport）];
+        H -- 管理 --> I[底层协议<br/>（SSE, WebSocket, 等）];
         J[服务器端 EventBus] -.->|由 EventServer 转发| H;
     end
 
@@ -406,6 +406,107 @@ EventServer.setPubSubTransport(wsTransport); // 新的
 ```
 
 通过这种方式，您的核心业务逻辑（`EventServer`）与底层通信协议完全解耦。
+
+### 6. 使用 `backendEventable` 简化后端事件处理
+
+为了实现一种更集成、面向对象的事件处理方法，`@isdk/tool-event` 提供了一个强大的 `backendEventable` 工具函数。您不再需要在任何地方调用静态的 `EventServer.publish()` 方法，而是可以将您的类变成一等事件公民。
+
+`backendEventable` 函数是一个装饰器，它将事件能力（如 `on`、`emit`、`once` 等）直接注入到类的原型中。这允许该类的实例使用熟悉的 `this.emit()` 和 `this.on()` 语法与共享事件总线进行交互。
+
+这种模式特别适用于：
+
+- 让 `EventServer` 自身能够触发其生命周期事件。
+- 允许任何后端服务（只要它继承自 `ToolFunc`）轻松地发布或订阅事件，而无需直接引用事件总线。
+- **增强 `EventClient`，使其成为一个功能强大的本地事件总线，同时连接到服务器和其他客户端。**
+
+**如何使用 `backendEventable`：**
+
+在您的应用程序的主设置文件中，您可以增强希望具备事件感知能力的类。这通常在应用程序启动时一次性完成。
+
+```typescript
+// --- 在您的应用程序主设置文件中 (例如, server.ts 或 client.ts) ---
+import { EventServer, EventClient, backendEventable, EventBusName } from '@isdk/tool-event';
+import { ToolFunc, ClientTools } from '@isdk/tool-func'; // 添加了 ClientTools
+import { event } from 'events-ex';
+
+// 1. 增强 EventServer 类本身，使其具备事件感知能力。
+// 这会“修补”该类，因此任何 EventServer 实例现在都可以使用 `this.emit()`。
+backendEventable(EventServer);
+
+// 2. 增强 EventClient 类，使其具备事件感知能力。
+// 这使得 EventClient 实例成为一个功能强大的本地事件总线，并连接到服务器。
+const EventBusClientName = 'event-bus-client'; // 如 test/event-server.test.ts 中所示
+backendEventable(EventClient, { eventBusName: EventBusClientName });
+
+
+// (可选) 增强一个自定义服务类
+class MyCustomService extends ToolFunc {
+  name = 'my-service';
+  doSomething() {
+    console.log('[MyService] 正在做某事并发出一个事件。');
+    this.emit('my-service-event', { info: '发生了一些重要的事情' });
+  }
+}
+backendEventable(MyCustomService);
+
+
+// --- 稍后，在服务器初始化期间 (server.ts) ---
+
+async function startServer() {
+  // 设置共享事件总线 (一次性设置)。
+  const eventBus = event.runSync();
+  new ToolFunc(EventBusName, { tools: { emitter: eventBus } }).register();
+
+  // 实例化您增强后的类。
+  const eventTool = new EventServer('event');
+  eventTool.register();
+
+  const myService = new MyCustomService();
+  myService.register();
+
+  // 现在，实例之间可以通过事件总线进行通信。
+  // 在 EventServer 实例上监听来自 MyCustomService 的自定义服务事件。
+  eventTool.on('my-service-event', (data) => {
+    console.log('EventServer 实例捕获到来自 MyCustomService 的事件:', data);
+    // 如果需要，您可以在这里将此事件转发给客户端：
+    // eventTool.publish('event-for-client', data);
+  });
+
+  // 触发发出事件的方法。
+  myService.doSomething();
+
+  // 您仍然可以使用静态的 publish 方法，它使用同一个事件总线。
+  EventServer.publish('another-event', { from: '静态调用' });
+}
+
+// startServer(); // 为客户端示例的清晰性而注释掉
+
+
+// --- 稍后，在客户端初始化期间 (client.ts) ---
+
+async function startClient() {
+  // 设置客户端事件总线 (一次性设置)。
+  const clientEventBus = event.runSync();
+  new ToolFunc(EventBusClientName, { tools: { emitter: clientEventBus } }).register();
+
+  // 将 EventClient 注册到 ClientTools (如 test/event-server.test.ts 中所示)
+  const event4Client = new EventClient('event');
+  ClientTools.register(event4Client);
+
+  // 现在，EventClient 实例可以使用 `this.emit()` 和 `this.on()`
+  // 与其本地事件总线进行交互，该总线也连接到服务器。
+  event4Client.on('server-time', (data) => {
+    console.log('[客户端] 通过 EventClient 实例收到服务器时间:', data);
+  });
+
+  // 示例：发出一个本地客户端事件，该事件可以转发到服务器
+  event4Client.emit('local-client-event', { action: '用户点击' });
+}
+
+// startClient(); // 为服务器示例的清晰性而注释掉
+```
+
+这种模式促进了一种更清晰、更解耦的架构，使您系统中的不同部分可以通过事件进行通信，而无需彼此紧密绑定。
 
 ## 🤝 贡献
 
