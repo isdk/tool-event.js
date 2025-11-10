@@ -19,161 +19,53 @@
 
 ## 🏛️ 架构
 
-`@isdk/tool-event` 引入了 `EventClient` 和 `EventServer`，它们与一个可插拔的传输层协同工作，以促进实时通信。
+`@isdk/tool-event` 系统构建在一个强大而灵活的架构之上，该架构将事件逻辑与底层通信协议分离开来。其核心是一个**可插拔的发布/订阅（PubSub）传输层**，允许您通过简单地提供一个兼容的传输实现，来使用服务器发送事件（SSE）、WebSockets、IPC 或任何其他协议。
+
+要获取完整的开发者指南，请参阅 [**PubSub 开发者指南 (pubsub.md)**](./pubsub.md)。
+
+### 统一事件总线
+
+该系统创建了一个跨越服务器和客户端的无缝、双向事件总线。它通过分离**控制平面**（用于管理订阅）和**数据平面**（用于传递事件）来实现这一点。
+
+- **🛠️ 控制平面 (RPC):** 像 `subscribe` 和 `unsubscribe` 这样的操作，通过主 `@isdk/tool-rpc` 传输作为标准的 RPC 调用来处理。这复用了现有的、熟悉的服务发现和调用基础设施。
+- **📡 数据平面 (PubSub):** 实际的事件负载通过一个专用的、抽象的、可插拔的 PubSub 传输异步地传递给客户端。
+
+此设计如下图所示：
 
 ```mermaid
 graph TD
-    subgraph 客户端
-        A[你的应用] --> B[EventClient];
-        B -- 使用 --> C[IPubSubClientTransport<br/>（例,SseClientPubSubTransport）];
+    %% ========== Client Side ==========
+    subgraph "客户端"
+        EC[EventClient<br><i>需 backendEventable 注入 .on/.off/.emit</i>]
+        CT[ClientTransport<br><i>RPC: 发起 publish/subscribe</i>]
+        PCT[PubSubClientTransport<br><i>接收服务端广播事件</i>]
     end
 
-    subgraph 服务器端
-        G[EventServer] --> H[IPubSubServerTransport<br/>（例,SseServerPubSubTransport）];
-        H -- 管理 --> I[底层协议<br/>（SSE, WebSocket, 等）];
-        J[服务器端 EventBus] -.->|由 EventServer 转发| H;
+    %% ========== Server Side ==========
+    subgraph "服务端"
+        ES[EventServer<br><i>需 backendEventable 注入 .on/.off/.emit</i>]
+        ST[ServerTransport<br><i>RPC: 接收 publish/subscribe</i>]
+        PST[PubSubServerTransport<br><i>向客户端广播事件</i>]
     end
 
-    subgraph 网络
-        C -- HTTP/SSE 连接 --> I;
-    end
+    %% ========== Connections ==========
+    EC -- "RPC: publish('client:xxx', data) (需 forwardEvent)" --> CT
+    CT -- "→ RPC 请求" --> ST
+    ST -- "→ 交由 EventServer 处理" --> ES
 
-    A -- 1. subscribe('my-event') --> B;
-    B -- 2. connect() --> C;
-    C -- 3. 建立持久连接 --> I;
-    I -- 4. 创建会话 --> H;
-    H -- 5. 注册订阅 --> H;
-    J -- 6. emit('my-event', data) --> G;
-    G -- 7. publish(data) --> H;
-    H -- 8. 向订阅的客户端发送数据 --> I;
-    I -- 9. 推送事件数据 --> C;
-    C -- 10. 触发事件 --> B;
-    B -- 11. emit('my-event', data) --> A;
+    ES -- "PubSub: 广播事件" --> PST
+    PST -- "→ PubSub 消息" --> PCT
+    PCT -- "→ 由 EventClient 分发" --> EC
+
+    class EC,PCT,CT client
+    class ES,PST,ST server
 ```
 
-1. **EventClient/EventServer:** 这些是专门化的 `ResClientTools`/`ResServerTools`，用于处理订阅、取消订阅和发布事件的逻辑。
-2. **传输层 (`IPubSub...Transport`):** 这是负责实际通信协议的抽象。该库提供了默认的 `SseServerPubSubTransport` 和 `SseClientPubSubTransport` 用于服务器发送事件。您可以为 WebSockets、IPC 或其他协议创建自己的传输。
-3. **事件流:** 客户端使用 `EventClient` 来 `subscribe` (订阅) 主题。传输层建立连接。当服务器的 `EventServer` `publish` (发布) 事件时，传输层会将其仅传递给已订阅的客户端。
-
-## 📦 安装
-
-```bash
-npm install @isdk/tool-event @isdk/tool-rpc @isdk/tool-func
-```
-
-## 🚀 快速入门
-
-此示例演示了如何设置一个每 3 秒推送一次当前时间的服务器，以及一个订阅该事件的客户端。
-
-### 第 1 步：定义事件服务器
-
-`EventServer` 充当事件管理的中心枢纽。我们将使用内置的 SSE 传输，并使用 `@isdk/tool-rpc` 的 HTTP 传输来托管它。
-
-```typescript
-// ./server.ts
-import { HttpServerToolTransport } from '@isdk/tool-rpc';
-import { EventServer, SseServerPubSubTransport } from '@isdk/tool-event';
-
-async function startServer() {
-  // 1. 为服务器实例化 SSE 传输。
-  const sseTransport = new SseServerPubSubTransport();
-
-  // 2. 在 EventServer 类上静态设置传输。
-  EventServer.setPubSubTransport(sseTransport);
-
-  // 3. 实例化并注册主事件工具。
-  // 名称 'event' 将成为 URL 的一部分 (例如, /api/event)。
-  const eventTool = new EventServer('event');
-  eventTool.register();
-
-  // 4. 将名为 'server-time' 的服务器端事件转发给客户端。
-  // 任何订阅了 'server-time' 的客户端都将收到它。
-  eventTool.forward('server-time');
-
-  // 5. 使用 tool-rpc 的标准 HTTP 传输来托管我们的工具。
-  const httpTransport = new HttpServerToolTransport();
-
-  // 6. 挂载 EventServer 基类。传输层将找到已注册的 'event' 工具。
-  // 这将在 '/api' 前缀下创建必要的端点。
-  httpTransport.mount(EventServer, '/api');
-
-  // 7. 启动服务器。
-  const port = 3000;
-  await httpTransport.start({ port });
-  console.log(`✅ 事件服务器已启动于 http://localhost:${port}`);
-
-  // 8. 每 3 秒发布一次 'server-time' 事件。
-  setInterval(() => {
-    const data = { now: new Date().toISOString() };
-    console.log(`
-[服务器] 发布 'server-time':`, data);
-    // 使用静态的 publish 方法发送事件。
-    EventServer.publish('server-time', data);
-  }, 3000);
-}
-
-startServer();
-```
-
-### 第 2 步：设置并使用客户端
-
-`EventClient` 连接到服务器，订阅事件，并且也可以将事件发布回服务器。
-
-```typescript
-// ./client.ts
-import { HttpClientToolTransport } from '@isdk/tool-rpc';
-import { EventClient, SseClientPubSubTransport } from '@isdk/tool-event';
-
-async function main() {
-  const apiRoot = 'http://localhost:3000/api';
-
-  // 1. 在 EventClient 类上静态设置 SSE 传输。
-  EventClient.setPubSubTransport(new SseClientPubSubTransport());
-
-  // 2. 使用标准的 HTTP 传输来发现远程工具。
-  const httpTransport = new HttpClientToolTransport(apiRoot);
-  await httpTransport.mount(EventClient);
-
-  // 3. 获取为远程 'event' 工具动态创建的代理。
-  const eventClient = EventClient.get('event');
-  if (!eventClient) {
-    throw new Error('远程事件工具未找到！');
-  }
-
-  // 4. 在客户端的本地事件总线上监听 'server-time' 事件。
-  eventClient.on('server-time', (data) => {
-    console.log(`[客户端] 收到 'server-time' 事件:`, data);
-  });
-
-  // 5. 从服务器订阅 'server-time' 事件。
-  // 这将打开 SSE 连接。
-  console.log('[客户端] 正在订阅 'server-time'...');
-  await eventClient.subscribe('server-time');
-  console.log('✅ [客户端] 订阅成功！');
-
-  // 6. 演示从客户端向服务器发布事件。
-  setTimeout(() => {
-    const message = { text: '来自客户端的问候！' };
-    console.log('\n[客户端] 正在发布 "client-greeting":', message);
-    eventClient.publish({ event: 'client-greeting', data: message });
-  }, 5000);
-}
-
-main();
-```
-
-### 第 3 步：运行示例
-
-1. 运行服务器: `ts-node ./server.ts`
-2. 在新的终端中，运行客户端: `ts-node ./client.ts`
-
-您将看到客户端每 3 秒从服务器接收一次时间更新。
-
-## 核心概念：设计哲学
+### 核心概念：设计哲学
 
 为了充分理解 `EventServer` 和 `EventClient`，关键是要明白它们的设计初衷：**将实时事件无缝地集成到 `@isdk/tool-rpc` 的现有 RPC/RESTful 架构中**。它们不仅仅是事件处理器，更是连接本地事件与远程世界的智能桥梁。
 
-### 1. 为什么要继承 `ResServerTools` / `ResClientTools`？
+#### 1. 为什么要继承 `ResServerTools` / `ResClientTools`？
 
 这个核心设计决策带来了几大好处，避免了重新发明轮子：
 
@@ -186,7 +78,7 @@ main();
 
 - **复用传输层**：整个 `@isdk/tool-rpc` 的传输层和中间件生态系统都可以被直接复用。
 
-### 2. 事件流作为一种“资源”
+#### 2. 事件流作为一种“资源”
 
 该库优雅地将一个有状态的、持久的连接（如 SSE）抽象成一个无状态的、符合 REST 风格的“资源”。
 
@@ -196,7 +88,7 @@ main();
 
 这种设计将复杂的实时连接管理简化为开发者已经非常熟悉的、清晰的 REST/RPC 模型。
 
-### 3. 作为“桥梁”的角色
+#### 3. 作为“桥梁”的角色
 
 `EventServer` 和 `EventClient` 的核心功能是充当**桥梁**：
 
