@@ -17,6 +17,73 @@ This package is built upon `@isdk/tool-func` and `@isdk/tool-rpc`. Please ensure
 - **🎯 Targeted Publishing:** Publish events from the server to all subscribed clients or target specific clients by their ID.
 - **🔐 Secure by Default:** Client-published events are sandboxed and are not automatically injected into the server's main event bus unless explicitly enabled, preventing unintended side effects.
 
+## 🚀 Quick Start
+
+### 1. Installation
+
+```bash
+npm install @isdk/tool-event
+```
+
+### 2. Server-Side Setup (`server.ts`)
+
+The library exports a pre-instantiated instance of the `EventServer` class named `eventServer`. The tool name for this instance is defined by the exported constant `EventName` (whose value is `'event'`).
+
+```typescript
+import { EventServer, eventServer, SseServerPubSubTransport } from '@isdk/tool-event';
+import { ServerTools, HttpServerToolTransport } from '@isdk/tool-rpc';
+
+// 1. Set up the server-side SSE transport (SSE is a built-in protocol)
+EventServer.setPubSubTransport(new SseServerPubSubTransport());
+
+// 2. Register the pre-instantiated EventServer instance (default name is 'event')
+eventServer.register();
+
+// 3. Start the HTTP server and mount tools at the /api path
+const server = new HttpServerToolTransport();
+server.mount(ServerTools, '/api');
+server.start({ port: 3000 });
+
+console.log('Event server started at: http://localhost:3000/api');
+
+// Example: Broadcast an event to all subscribed clients using the static method
+setInterval(() => {
+  EventServer.publish('server-time', { time: new Date().toISOString() });
+}, 5000);
+```
+
+### 3. Client-Side Setup (`client.ts`)
+
+Similarly, on the client side, you can directly use the exported `eventClient` instance of the `EventClient` class.
+
+```typescript
+import { EventClient, eventClient, SseClientPubSubTransport } from '@isdk/tool-event';
+import { ClientTools, HttpClientToolTransport } from '@isdk/tool-rpc';
+
+async function main() {
+  const apiRoot = 'http://localhost:3000/api';
+
+  // 1. Set up the client-side SSE transport
+  EventClient.setPubSubTransport(new SseClientPubSubTransport());
+
+  // 2. Initialize the client transport and connect to the remote server
+  const clientTransport = new HttpClientToolTransport(apiRoot);
+  await clientTransport.mount(ClientTools);
+
+  // 3. Subscribe to and listen for the 'server-time' event (using the exported eventClient)
+  await eventClient.subscribe('server-time');
+  
+  eventClient.on('server-time', (data) => {
+    console.log('Received server time:', data.time);
+  });
+
+  // 4. (Optional) Publish an event to the server
+  await eventClient.publish({ event: 'client-hello', data: { message: 'Hello from client!' } });
+}
+
+main().catch(console.error);
+```
+
 ## 🏛️ Architecture
 
 The `@isdk/tool-event` system is built on a powerful and flexible architecture that separates event logic from the underlying communication protocol. Its core is a **pluggable PubSub transport layer**, allowing you to use Server-Sent Events (SSE), WebSockets, IPC, or any other protocol by simply providing a compatible transport.

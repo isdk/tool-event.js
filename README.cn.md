@@ -17,6 +17,73 @@
 - **🎯 定向发布:** 从服务器向所有订阅的客户端发布事件，或通过客户端 ID 定向发布给特定客户端。
 - **🔐 默认安全:** 客户端发布的事件是沙箱化的，不会自动注入到服务器的主事件总线中，除非显式启用，以防止意外的副作用。
 
+## 🚀 快速上手
+
+### 1. 安装
+
+```bash
+npm install @isdk/tool-event
+```
+
+### 2. 服务端设置 (`server.ts`)
+
+库中已经导出了一个预先实例化的 `EventServer` 类实例，名为 `eventServer`。该实例的工具名称由导出的常量 `EventName` 定义（其值为 `'event'`）。
+
+```typescript
+import { EventServer, eventServer, SseServerPubSubTransport } from '@isdk/tool-event';
+import { ServerTools, HttpServerToolTransport } from '@isdk/tool-rpc';
+
+// 1. 设置服务端 SSE 传输层 (SSE 是内置的传输协议)
+EventServer.setPubSubTransport(new SseServerPubSubTransport());
+
+// 2. 注册预设的 EventServer 实例 (其实例名称 eventServer.name 默认为 'event')
+eventServer.register();
+
+// 3. 启动 HTTP 服务器并挂载工具到 /api 路径
+const server = new HttpServerToolTransport();
+server.mount(ServerTools, '/api');
+server.start({ port: 3000 });
+
+console.log('事件服务端已启动：http://localhost:3000/api');
+
+// 示例：使用静态方法向所有已订阅的客户端广播事件
+setInterval(() => {
+  EventServer.publish('server-time', { time: new Date().toISOString() });
+}, 5000);
+```
+
+### 3. 客户端设置 (`client.ts`)
+
+同样，客户端可以直接使用库中导出的 `EventClient` 类实例 `eventClient`。
+
+```typescript
+import { EventClient, eventClient, SseClientPubSubTransport } from '@isdk/tool-event';
+import { ClientTools, HttpClientToolTransport } from '@isdk/tool-rpc';
+
+async function main() {
+  const apiRoot = 'http://localhost:3000/api';
+
+  // 1. 设置客户端 SSE 传输层
+  EventClient.setPubSubTransport(new SseClientPubSubTransport());
+
+  // 2. 初始化客户端传输层并连接到远程服务端
+  const clientTransport = new HttpClientToolTransport(apiRoot);
+  await clientTransport.mount(ClientTools);
+
+  // 3. 订阅并监听 'server-time' 事件 (直接使用导出的 eventClient 实例)
+  await eventClient.subscribe('server-time');
+
+  eventClient.on('server-time', (data) => {
+    console.log('收到服务器推送的时间:', data.time);
+  });
+
+  // 4. (可选) 向服务器发布事件
+  await eventClient.publish({ event: 'client-hello', data: { message: '你好，服务端！' } });
+}
+
+main().catch(console.error);
+```
+
 ## 🏛️ 架构
 
 `@isdk/tool-event` 系统构建在一个强大而灵活的架构之上，该架构将事件逻辑与底层通信协议分离开来。其核心是一个**可插拔的发布/订阅（PubSub）传输层**，允许您通过简单地提供一个兼容的传输实现，来使用服务器发送事件（SSE）、WebSockets、IPC 或任何其他协议。
