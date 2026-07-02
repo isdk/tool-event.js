@@ -48,8 +48,8 @@ describe('EventTransport End-to-End Test', () => {
     const dispatcher = new RpcServerDispatcher({ registry: ResServerTools.items, tracker })
 
     serverTransport = new HttpServerToolTransport({ apiUrl: apiRoot, dispatcher });
-    serverTransport.addDiscoveryHandler(apiRoot, () => ResServerTools.toJSON());
     serverTransport.addRpcHandler(apiRoot);
+    serverTransport.addDiscoveryHandler(apiRoot, () => ResServerTools.toJSON());
 
     await serverTransport.start({ port, host: 'localhost' });
 

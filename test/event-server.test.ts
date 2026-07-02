@@ -48,14 +48,14 @@ describe('Event Server api', () => {
     const port = await findPort(3002)
     apiRoot = `http://localhost:${port}/api/`
 
-    const tracker = new RpcActiveTaskTracker()
-    const dispatcher = new RpcServerDispatcher({ registry: ServerTools.items, tracker })
+    // const tracker = new RpcActiveTaskTracker()
+    // const dispatcher = new RpcServerDispatcher({ registry: ServerTools.items, tracker })
 
-    server = new HttpServerToolTransport({ apiUrl: apiRoot, dispatcher })
-    server.addDiscoveryHandler(apiRoot, () => ServerTools.toJSON())
+    server = new HttpServerToolTransport()
     server.addRpcHandler(apiRoot)
+    server.addDiscoveryHandler(apiRoot, () => ServerTools.toJSON())
 
-    await server.start({ port, host: 'localhost' })
+    await server.start({ port })
 
     const clientTransport = new HttpClientToolTransport(apiRoot);
     RpcTransportManager.instance.register(clientTransport)
