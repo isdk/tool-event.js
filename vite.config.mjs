@@ -7,7 +7,7 @@ export default defineConfig({
     wasm(),
   ],
   test: {
-    testTimeout: 8000,
+    testTimeout: 4000,
     globals: true,
     setupFiles: [
       "./setupVitest.mjs",
