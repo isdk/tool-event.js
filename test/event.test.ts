@@ -1,3 +1,4 @@
+import {beforeAll, describe, expect, it} from 'vitest'
 import { Event } from 'events-ex'
 import { event } from "../src/event"
 import { ToolFunc } from "@isdk/tool-func"
