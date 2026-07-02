@@ -2,7 +2,7 @@
 import { describe, expect, it, vi, beforeAll, afterAll } from 'vitest'
 import { findPort, sleep } from '@isdk/util'
 import { Funcs, ToolFunc } from '@isdk/tool-func'
-import { ClientTools, HttpServerToolTransport, HttpClientToolTransport, ServerTools } from '@isdk/tool-rpc'
+import { ClientTools, HttpServerToolTransport, HttpClientToolTransport, ServerTools, RpcActiveTaskTracker, RpcServerDispatcher, RpcTransportManager } from '@isdk/tool-rpc'
 import { EventServer, EventClient, event, EventToolFunc, ClientEventPrefix } from '../src'
 import { EventBusName, EventName, backendEventable } from "../src/utils"
 import { SseClientPubSubTransport, SseServerPubSubTransport } from "../src/transports/pubsub"
@@ -46,16 +46,20 @@ describe('Event Server api', () => {
     })
 
     const port = await findPort(3002)
-    server = new HttpServerToolTransport()
-    await server.mount(ServerTools, '/api')
-    server.start({ port })
-    // const result = await server.listen({ port })
-    // console.log('server listening on ', result)
-    apiRoot = `http://localhost:${port}/api`
+    apiRoot = `http://localhost:${port}/api/`
 
-    ServerTools.setApiRoot(apiRoot)
+    const tracker = new RpcActiveTaskTracker()
+    const dispatcher = new RpcServerDispatcher({ registry: ServerTools.items, tracker })
+
+    server = new HttpServerToolTransport({ apiUrl: apiRoot, dispatcher })
+    server.addDiscoveryHandler(apiRoot, () => ServerTools.toJSON())
+    server.addRpcHandler(apiRoot)
+
+    await server.start({ port, host: 'localhost' })
+
     const clientTransport = new HttpClientToolTransport(apiRoot);
-    await clientTransport.mount(ClientTools)
+    RpcTransportManager.instance.register(clientTransport)
+    clientTransport.mount(ClientTools)
 
     EventClient.setPubSubTransport(new SseClientPubSubTransport())
     EventServer.setPubSubTransport(new SseServerPubSubTransport())
@@ -78,7 +82,8 @@ describe('Event Server api', () => {
     // init the EventSource to listen the t1 and t2 event only
     // await event.run({event: ['t1', 't2'], act: 'init'})
     await event.init(['t1', 't2'])
-    const es = new EventSource(ClientTools.apiRoot + '/event')
+    const esUrl = ClientTools.apiRoot!.endsWith('/') ? ClientTools.apiRoot + 'event' : ClientTools.apiRoot + '/event';
+    const es = new EventSource(esUrl)
     try {
       let t1 = 0
       let t2 = 0

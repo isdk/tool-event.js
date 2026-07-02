@@ -1,374 +1,440 @@
-# @isdk/tool-rpc
+# @isdk/tool-rpc v2.6 使用手册（AI 开发者版）
 
-`@isdk/tool-rpc` 是一个功能强大的 TypeScript 库，它将 `@isdk/tool-func` 的模块化能力从本地扩展到网络。通过它，您可以轻松地将 `ToolFunc` 作为远程服务暴露，并在客户端像调用本地函数一样无缝调用。它非常适合用于构建分布式 AI 代理、微服务架构或任何需要在不同进程或机器之间进行工具调用的场景。
+## 一、概述
 
-本项目基于 `@isdk/tool-func` 构建。在继续之前，请确保您已熟悉其核心概念。
+`@isdk/tool-rpc` 是一个 TypeScript 库，用于将本地函数（`ToolFunc`）暴露为远程 RPC 服务。v2.6 重构后，采用 **Trinity 架构**：`RpcTransportManager`（路由管理）、`RpcServerDispatcher`（执行调度）、`RpcActiveTaskTracker`（任务追踪），支持多实例隔离、流式响应、后台任务轮询、物理连接联动等工业级特性。
 
-## ✨ 核心功能
+内置两种传输层：**HTTP**（基于 Node.js http 模块）和 **Mailbox**（基于 `@mboxlabs/mailbox`，适用于跨进程/线程通信）。
 
-- **分层抽象:** 提供了一套分层的工具类 (`ServerTools`, `RpcMethodsServerTool`, `ResServerTools`)，允许您根据需求选择合适的抽象级别。
-- **🌐 RESTful 接口:** 使用 `ResServerTools` 快速创建符合 REST 风格的 API，自动处理 `get`, `list`, `post`, `put`, `delete` 等标准操作。
-- **🔧 RPC 方法分组:** 使用 `RpcMethodsServerTool` 将多个相关函数（方法）捆绑在单个工具下，通过 `act` 参数进行调用。
-- **🔌 客户端自动代理:** 客户端 (`ClientTools` 及其子类) 能从服务器自动加载工具定义，并动态生成类型安全的代理函数，使远程调用如本地调用般简单。
-- **🚀 内置 HTTP 传输:** 提供基于 Node.js `http` 模块的 `HttpServerToolTransport` 和基于 `fetch` 的 `HttpClientToolTransport`，开箱即用。
-- **🌊 支持流式响应:** 服务器和客户端均支持 `ReadableStream`，可轻松实现流式数据传输。
+## 二、核心概念
 
-## 📦 安装
+### 2.1 三层抽象
+
+| 层次 | 说明 | 典型用途 |
+|------|------|----------|
+| **ServerTools / ClientTools** | 单个远程函数（如 `ping`） | 简单 RPC |
+| **ResServerTools / ResClientTools** | 一组方法组成的 RESTful 资源（CRUD 自动映射） | 资源型服务 |
+| **自定义方法** | 在子类中以 `$` 开头的方法（如 `$status`） | 扩展操作，客户端自动去掉 `$` 调用 |
+
+### 2.2 Trinity 组件
+
+| 组件 | 角色 | 关键方法/属性 |
+|------|------|---------------|
+| `RpcTransportManager` | 协议注册中心、路由审计、连接池管理 | `bindScheme()`, `addServer()`, `startAll()`, `stopAll()`, `validateRpcRequest()` |
+| `RpcServerDispatcher` | 执行调度、能力协商、影子实例隔离、超时裁决 | `dispatch()`, `handleError()`, 自动注入 `this.ctx.tracker` |
+| `RpcActiveTaskTracker` | 任务注册、状态转换、硬死线、结果保留、物理中止联动 | `register()`, `get()`, 内部维护 `tasks` Map |
+
+### 2.3 内置系统工具
+
+- **`rpcTask`**（`RpcTaskResource`）：由 `RpcServerDispatcher` 自动注册到 `systemRegistry`，提供标准任务轮询和取消端点。
+  - `GET /api/rpcTask/{resId}` — 查询任务状态（返回 102/200/404/408）
+  - `POST /api/rpcTask/{resId}?act=cancel` — 取消任务
+
+**注意**：不要手动注册 `RpcTaskResource`，否则导致重复注册错误。
+
+### 2.4 标准化数据模型
+
+#### ToolRpcRequest
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `apiUrl` | string | 是 | 完整逻辑 URL（如 `http://localhost:3000/api/`） |
+| `toolId` | string | 是 | 工具注册名 |
+| `act` | string | 否 | 子方法（如 `status`, `cancel`） |
+| `resId` | string | 否 | 资源 ID |
+| `requestId` | string | 是 | 唯一调用 ID（用于幂等、追踪） |
+| `params` | any | 是 | 业务参数 |
+| `headers` | object | 否 | 标准 Header（如 `rpc-timeout`, `rpc-act`） |
+| `signal` | AbortSignal | 否 | 取消信号 |
+
+#### ToolRpcResponse
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `status` | number | 状态码（200/102/400/404/408/413/504） |
+| `data` | any \| ReadableStream | 业务结果或流 |
+| `error` | object | 结构化错误（`code`, `message`, `data`） |
+| `headers` | object | 元数据（如 `rpc-retry-after`） |
+
+**常用状态码**：
+- 200：成功
+- 102：任务进入后台（`keepAliveOnTimeout` 触发）
+- 400：能力冲突（请求流但工具不支持）
+- 404：工具或任务不存在
+- 408：硬死线终止
+- 409：requestId 冲突
+- 413：请求体超限
+
+### 2.5 任务结果保留策略（`RpcTaskRetention`）
+
+| 值 | 含义 |
+|----|------|
+| `None` (0) | 完成后立即移除（默认） |
+| `Permanent` (-1) | 永久保留 |
+| `Once` ('once') | 第一次成功 `get` 后自动清除 |
+| `number` (ms) | 保留指定毫秒数 |
+| 对象 | `{ onceFallbackMs?, maxRetentionMs? }` |
+
+## 三、快速入门（3 分钟）
+
+### 3.1 安装
 
 ```bash
 npm install @isdk/tool-rpc @isdk/tool-func
+# 如果使用 Mailbox 传输层，还需安装：
+npm install @mboxlabs/mailbox
 ```
 
-## 🚀 快速开始
-
-以下示例演示了如何创建一个 RESTful 工具，在服务器上暴露它，并从客户端调用它。
-
-### 第 1 步：定义服务器端工具
-
-创建一个继承自 `ResServerTools` 的类。实现 `get`, `list` 等标准方法，以及任何以 `$` 为前缀的自定义业务逻辑方法。
-
-```typescript
-// ./tools/UserTool.ts
-import { ResServerTools, ResServerFuncParams } from '@isdk/tool-rpc';
-import { NotFoundError } from '@isdk/common-error';
-
-// 用于演示的内存数据库
-const users: Record<string, any> = {
-  '1': { id: '1', name: '爱丽丝' },
-  '2': { id: '2', name: '鲍勃' },
-};
-
-export class UserTool extends ResServerTools {
-  // 标准 RESTful 方法：GET /api/users/:id
-  get({ id }: ResServerFuncParams) {
-    const user = users[id as string];
-    if (!user) throw new NotFoundError(id as string, 'user');
-    return user;
-  }
-
-  // 标准 RESTful 方法：GET /api/users
-  list() {
-    return Object.values(users);
-  }
-
-  // 自定义 RPC 方法
-  $promote({ id }: ResServerFuncParams) {
-    const user = users[id as string];
-    if (!user) throw new NotFoundError(id as string, 'user');
-    return { ...user, role: 'admin' };
-  }
-}
-```
-
-### 第 2 步：设置并启动服务器
-
-在您的服务器入口文件中，实例化工具，然后设置并启动 `HttpServerToolTransport`。
-
-```typescript
-// ./server.ts
-import { HttpServerToolTransport, ResServerTools } from '@isdk/tool-rpc';
-import { UserTool } from './tools/UserTool';
-
-async function startServer() {
-  // 1. 实例化并注册您的工具。
-  // 名称 'users' 将作为 URL 的一部分 (例如 /api/users)
-  new UserTool('users').register();
-
-  // 2. 初始化服务器传输层
-  const serverTransport = new HttpServerToolTransport();
-
-  // 3. 挂载工具的基类。传输层将找到所有已注册的 ResServerTools 实例。
-  // 这将在 '/api' 前缀下创建 API 端点。
-  serverTransport.mount(ResServerTools, '/api');
-
-  // 4. 启动服务器
-  const port = 3000;
-  await serverTransport.start({ port });
-  console.log(`✅ 工具服务器已启动，监听地址: http://localhost:${port}`);
-}
-
-startServer();
-```
-
-### 第 3 步：设置并使用客户端
-
-在客户端代码中，初始化 `HttpClientToolTransport`，它会自动从服务器加载工具定义并创建代理。
-
-```typescript
-// ./client.ts
-import { HttpClientToolTransport, ResClientTools } from '@isdk/tool-rpc';
-
-// 定义一个类型以获得完整的类型提示，包括自定义方法
-type UserClientTool = ResClientTools & {
-  promote(params: { id: string }): Promise<{ id: string; name: string; role: string }>;
-};
-
-async function main() {
-  const apiRoot = 'http://localhost:3000/api';
-
-  // 1. 初始化客户端传输层
-  const clientTransport = new HttpClientToolTransport(apiRoot);
-
-  // 2. 挂载客户端工具。此操作将：
-  //    a. 为 ResClientTools 设置传输层
-  //    b. 从服务器加载 API 定义并创建代理工具
-  await clientTransport.mount(ResClientTools);
-
-  // 3. 获取为远程工具动态创建的代理
-  const userTool = ResClientTools.get('users') as UserClientTool;
-  if (!userTool) {
-    throw new Error('远程工具 "users" 未找到！');
-  }
-
-  // 4. 像调用本地方法一样调用远程 API！
-
-  // 调用 GET /api/users/1
-  const user = await userTool.get!({ id: '1' });
-  console.log('获取用户:', user); // { id: '1', name: '爱丽丝' }
-
-  // 调用 GET /api/users
-  const allUsers = await userTool.list!();
-  console.log('所有用户:', allUsers); // [{...}, {...}]
-
-  // 调用自定义 RPC 方法 $promote
-  // 客户端代理会自动处理 `act` 参数
-  const admin = await userTool.promote({ id: '2' });
-  console.log('提升后的用户:', admin); // { id: '2', name: '鲍勃', role: 'admin' }
-}
-
-main();
-```
-
-## 核心概念：分层抽象
-
-`@isdk/tool-rpc` 的核心设计思想是分层抽象，将网络通信与业务逻辑清晰分离。您可以根据需求的复杂度选择合适的抽象层级。
-
-```mermaid
-graph TD
-    subgraph 客户端
-        A[客户端应用] --> B{ResClientTools};
-        B --> C{RpcMethodsClientTool};
-        C --> D{ClientTools};
-    end
-    subgraph 传输层
-        D --> |使用| E[IClientToolTransport];
-        E -- HTTP 请求 --> F[IServerToolTransport];
-    end
-    subgraph 服务器端
-        F -->|调用| G{ServerTools};
-        H{ResServerTools} --> I{RpcMethodsServerTool};
-        I --> G;
-    end
-
-    A -- 在实例上调用方法 --> B;
-    B -- 透明地调用 --> E;
-    F -- 接收请求并查找 --> H;
-    H -- 执行业务逻辑 --> H;
-    H -- 通过以下方式返回结果 --> F;
-    F -- 发送 HTTP 响应 --> E;
-    E -- 将结果返回给 --> B;
-    B -- 将结果返回给 --> A;
-```
-
-### 命名说明：`ServerTools` (复数) vs. 实例 (单数)
-
-您可能会注意到类名 `ServerTools`、`ClientTools` 等是复数形式。这是一个刻意的设计，反映了其双重角色：
-
-- **静态类作为注册表 (The Plural 'Tools')**: `ServerTools` 的静态部分（例如 `ServerTools.register()`, `ServerTools.items`）充当所有远程工具的**全局注册表和管理器**。它持有一个工具集合，并提供管理这些工具的静态方法。这就是名称中“Tools”（复数）的由来。
-
-- **实例作为单个工具 (The Singular 'Tool')**: 当您创建一个实例时（例如 `new ServerTools({ name: 'myTool', ... })`），您实际上是在定义一个**单一的、具体的工具**。这个实例封装了单个函数的逻辑、元数据和配置。
-
-简而言之：**类是工具的集合，实例是单个工具。** 这种设计将工具的管理（静态）与工具的定义（实例）清晰地分离开来。
-
-### 第 1 层：`ServerTools` / `ClientTools` - 基础远程函数
-
-这是最基础的层，代表一个单一的、可远程调用的函数。
-
-- **`ServerTools`**:
-  - **概念**: 一个独立的、可被远程执行的函数。
-  - **用途**: 当您只需要暴露一些零散、无太多关联的函数时，这是最简单的方式。
-  - **高级用法**: 在 `func` 中，可以通过 `params._req` 和 `params._res` 访问原始的 HTTP 请求和响应对象，以便进行更底层的控制。
-  - **示例**:
-
-    ```typescript
-    // server.ts
-    new ServerTools({
-      name: 'ping',
-      isApi: true, // 标记为可被发现
-      func: () => 'pong',
-    }).register();
-    ```
-
-- **`ClientTools`**:
-  - **概念**: 服务器上 `ServerTools` 的客户端代理。
-  - **工作原理**: `client.init()` 后，它会创建一个名为 `ping` 的 `ClientTools` 实例。当您调用 `ToolFunc.run('ping')` 时，它会通过网络将请求发送到服务器。
-
-### 第 2 层：`RpcMethodsServerTool` / `RpcMethodsClientTool` - 面向对象的服务
-
-这一层将多个相关的函数组织成一个类似“对象”或“服务”的集合。
-
-- **`RpcMethodsServerTool`**:
-  - **概念**: 一个包含多个可调用方法的“服务”对象。它充当一个分发器。
-  - **用途**: 当您有一组功能内聚的操作时（例如，一个 `UserService` 包含 `createUser`, `updateUser`, `getUser`），使用此类可以更好地组织代码。
-  - **工作原理**: 在类中，以 `$` 为前缀定义的方法（如 `$createUser`）会被自动注册为 RPC 方法。客户端通过在请求中传递 `act: '$createUser'` 参数来指定调用哪个方法。
-  - **示例**:
-
-    ```typescript
-    // server.ts
-    class UserService extends RpcMethodsServerTool {
-      $createUser({ name }) {
-        // ... 创建用户的逻辑
-        return { id: 'user-1', name };
-      }
-      $getUser({ id }) {
-        // ... 获取用户的逻辑
-        return { id, name: 'Test User' };
-      }
-    }
-    new UserService('userService').register();
-    ```
-
-- **`RpcMethodsClientTool`**:
-  - **概念**: 远程服务对象的客户端代理。
-  - **工作原理**: 初始化时，它会检测到服务器上的 `$createUser` 和 `$getUser` 方法，并在客户端实例上动态创建对应的 `createUser()` 和 `getUser()` 方法。这使得调用看起来就像在调用一个本地对象的方法，完全隐藏了底层的 `act` 参数和网络通信。
-  - **示例**:
-
-    ```typescript
-    // client.ts
-    const userService = RpcMethodsClientTool.get('userService');
-    const newUser = await userService.createUser({ name: 'Alice' });
-    ```
-
-### 第 3 层：`ResServerTools` / `ResClientTools` - RESTful 资源
-
-这是最高级的抽象，它在 RPC 的基础上提供了一个以资源为中心的 RESTful 风格 API。
-
-- **`ResServerTools`**:
-  - **概念**: 代表一个 RESTful 资源，内置了对标准 HTTP 动词（GET, POST, PUT, DELETE）的映射。
-  - **用途**: 用于需要提供标准 CRUD（创建、读取、更新、删除）操作的场景，例如管理 `users` 或 `products` 资源。
-  - **工作原理**: 它继承自 `RpcMethodsServerTool`，并预定义了 `get`, `list`, `post`, `put`, `delete` 等特殊方法。HTTP 传输层会根据请求的 `method` (GET/POST) 和 URL 中是否包含 `id` 来智能地调用相应的方法。
-    - `GET /users/:id` -> `get({ id })`
-    - `GET /users` -> `list()`
-    - `POST /users` -> `post({ val })`
-  - **高级用法**: 由于它继承自 `RpcMethodsServerTool`，您仍然可以在 `ResServerTools` 的子类中定义自定义的 `$` 方法，从而将 RESTful 风格与特定的 RPC 调用结合起来（如此页的快速入门示例所示）。
-
-- **`ResClientTools`**:
-  - **概念**: 远程 RESTful 资源的客户端代理。
-  - **工作原理**: 它提供了一组便捷的方法，如 `.get()`, `.list()`, `.post()` 等，这些方法会自动构造并发送符合 REST 语义的请求。
-  - **示例**:
-
-    ```typescript
-    // client.ts
-    const userRes = ResClientTools.get('users');
-    const user = await userRes.get({ id: '1' }); // 发送 GET /api/users/1
-    const allUsers = await userRes.list();       // 发送 GET /api/users
-    ```
-
-## 🔌 传输层 (Transport Layer)
-
-传输层是 `@isdk/tool-rpc` 的核心支柱，它充当服务器工具和客户端工具之间的通信桥梁，实现了真正的远程过程调用（RPC）。
-
-### 设计思想
-
-传输层的核心设计思想是**关注点分离**。它将工具的业务逻辑（您在 `Tool` 中定义的）与网络通信的实现细节（如协议、路由、序列化）完全解耦。这使得您的工具代码保持纯粹和可移植，无需关心它是通过 HTTP、WebSockets 还是其他任何协议进行通信。您只需定义工具的功能，传输层会处理好剩下的事情。
-
-### 核心抽象
-
-该架构围绕几个关键接口构建：
-
-- **`IToolTransport`**: 所有传输的通用基础接口，定义了 `mount`（挂载）等基本操作。
-- **`IServerToolTransport`**: 服务器端传输必须实现的接口。其核心职责是：
-    1. **暴露发现端点**: 创建一个通常为 `GET` 的路由（例如 `/api`），当客户端访问时，它会返回所有已注册并可用的工具的 JSON 定义。这是通过 `addDiscoveryHandler` 方法实现的。
-    2. **处理 RPC 调用**: 创建一个通用的 RPC 路由（例如 `/api/:toolId`），它接收请求，根据 `toolId` 查找对应的工具，执行它，然后返回结果。这是通过 `addRpcHandler` 方法实现的。
-    3. 管理服务器生命周期 (`start`, `stop`)。
-- **`IClientToolTransport`**: 客户端传输必须实现的接口。其核心职责是：
-    1. **加载 API 定义**: 调用 `loadApis()` 方法，该方法会访问服务器的发现端点以获取所有工具的定义。
-    2. **执行远程调用**: 实现 `fetch()` 方法，该方法负责将客户端的工具调用（函数名和参数）序列化，发送到服务器的 RPC 端点，并处理响应。
-
-### 内置 HTTP 传输
-
-本库提供了一套即插即用的、基于 HTTP 的传输实现，无需额外配置：
-
-- **`HttpServerToolTransport`**: 一个服务器端传输，使用 Node.js 内置的 `http` 模块来创建一个轻量级的服务器。当您调用 `serverTransport.mount(ServerTools, '/api')` 时，它会自动：
-  - 创建一个 `GET /api` 路由用于服务发现。
-  - 创建一个 `POST /api/:toolId` 路由（也支持其他方法）来处理所有工具的 RPC 调用。它会智能地从请求体或 URL 参数中解析出工具的参数。
-
-- **`HttpClientToolTransport`**: 一个客户端传输，使用跨平台的 `fetch` API 来向服务器发送请求。当您调用 `client.init()`（内部使用 `loadApis`）时，它会请求 `GET /api`。当您运行一个工具时，它会向 `POST /api/toolName` 发送一个包含参数的 JSON 请求。
-
-### 功能扩展：创建您自己的传输
-
-`@isdk/tool-rpc` 的设计是完全可扩展的。您可以通过实现上述接口来创建自己的传输层，以支持不同的协议（如 WebSockets, gRPC）或集成到现有的 Web 框架（如 Express, Koa, Fastify）中。
-
-**集成 Fastify 框架的思路**：
-
-1. 创建一个 `FastifyServerTransport` 类并实现 `IServerToolTransport`。
-2. 在 `mount` 方法中，您不再创建新的 `http` 服务器，而是接收一个现有的 `FastifyInstance` 作为选项。
-3. 使用 `fastify.get(apiPrefix, ...)` 来注册发现路由，其处理器调用 `ServerTools.toJSON()`。
-4. 使用 `fastify.all(apiPrefix + '/:toolId', ...)` 来注册 RPC 路由，其处理器从 `request.body` 或 `request.query` 中提取参数，调用相应的工具，然后使用 `reply` 发送响应。
-5. `start` 和 `stop` 方法可以委托给 Fastify 实例的 `listen` 和 `close`。
-
-这种可插拔的架构为 `@isdk/tool-rpc` 提供了极大的灵活性，使其能够轻松适应各种项目需求和技术栈。
-
-## 高级用法
-
-本节涵盖了 `@isdk/tool-rpc` 中一些更强大的功能，可用于构建灵活高效的应用程序。
-
-### 导出函数以在客户端执行
-
-在某些场景下，您可能希望将计算从服务器卸载或允许客户端在本地执行函数。`allowExportFunc` 选项通过序列化函数体并在发现阶段将其发送到客户端来实现这一点。当该选项设置为 `true` 时，客户端的 `ClientTools` 将自动使用这个下载的函数，而不是发起网络请求。
-
-**服务器端配置:**
+### 3.2 服务端：注册工具并启动（HTTP 示例）
 
 ```typescript
 // server.ts
+import {
+  ServerTools,
+  RpcServerDispatcher,
+  RpcActiveTaskTracker,
+  HttpServerToolTransport,
+  RpcTransportManager,
+} from '@isdk/tool-rpc';
+
+// 定义简单工具
 new ServerTools({
-  name: 'local-uuid',
+  name: 'greet',
   isApi: true,
-  allowExportFunc: true, // 允许此函数被下载
-  func: () => {
-    // 这段逻辑将在客户端执行
-    console.log('正在客户端生成 UUID...');
-    return Math.random().toString(36).substring(2, 15);
+  func: ({ name }: { name: string }) => `Hello, ${name}!`,
+}).register();
+
+// 创建 Dispatcher（自动注册 rpcTask 到 systemRegistry）
+const tracker = new RpcActiveTaskTracker();
+const dispatcher = new RpcServerDispatcher({ registry: ServerTools.items, tracker });
+
+// 创建 HTTP 传输
+const apiUrl = 'http://localhost:3000/api/';
+const transport = new HttpServerToolTransport({ apiUrl, dispatcher });
+transport.addDiscoveryHandler(apiUrl, () => ServerTools.toJSON());
+transport.addRpcHandler(apiUrl);
+
+// 注册到 Manager（自动检测路由冲突）
+RpcTransportManager.instance.addServer(transport);
+await RpcTransportManager.instance.startAll();
+console.log(`Server ready at ${apiUrl}`);
+```
+
+### 3.3 客户端：发现并调用（HTTP 示例）
+
+```typescript
+// client.ts
+import { HttpClientToolTransport, RpcTransportManager, ClientTools } from '@isdk/tool-rpc';
+
+RpcTransportManager.bindScheme('http', HttpClientToolTransport);
+await ClientTools.loadFrom(undefined, { apiUrl: 'http://localhost:3000/api/' });
+
+const greet = ClientTools.get('greet');
+const result = await greet.run({ name: 'World' });
+console.log(result); // "Hello, World!"
+```
+
+## 四、进阶用法
+
+### 4.1 流式响应（Streaming）
+
+#### 同时支持流和非流输出（使用 `this.isStream` 判断）
+
+工具可以声明 `params.stream` 参数，让客户端选择输出模式。使用内置的 `this.isStream(params)` 方法来判断是否应该返回流。
+
+```typescript
+// 服务端
+new ServerTools({
+  name: 'flexible-output',
+  isApi: true,
+  stream: true,                           // 声明支持流式能力
+  params: { stream: { type: 'boolean' } }, // 必须在 params 中声明 stream 参数
+  func: function (params: any) {
+    // 使用内置 isStream 方法判断（注意：必须用 function 声明，不能用箭头函数）
+    if (this.isStream(params)) {
+      // 流式输出
+      return new ReadableStream({
+        async start(controller) {
+          for (let i = 0; i < 5; i++) {
+            controller.enqueue(`块 ${i}\n`);
+            await new Promise(r => setTimeout(r, 100));
+          }
+          controller.close();
+        }
+      });
+    }
+    // 非流式输出（一次性返回）
+    return '一次性结果';
+  },
+}).register();
+
+// 客户端：请求流式
+const streamResult = await ClientTools.get('flexible-output').run({ stream: true });
+for await (const chunk of streamResult) {
+  console.log(chunk); // 逐块打印
+}
+
+// 客户端：请求非流式
+const plainResult = await ClientTools.get('flexible-output').run({ stream: false });
+console.log(plainResult); // "一次性结果"
+```
+
+**`isStream` 方法逻辑**：
+1. 首先检查工具是否具有流式能力（`this.stream` 是否为 `true`）。
+2. 如果是，再检查 `params` 定义中是否声明了 `stream` 参数。
+3. 如果两者都满足，则返回运行时 `params.stream` 的值；否则返回工具的静态 `stream` 属性。
+
+**关键点**：
+- 必须使用 `function` 关键字（而非箭头函数），以保证 `this` 指向工具实例。
+- 必须在 `params` 中显式声明 `stream` 参数，否则 `isStream` 会退化为静态 `stream` 属性。
+- 客户端无需特殊处理，根据返回值类型自动识别：`ReadableStream` 则迭代，否则直接使用。
+
+#### 流式生命周期行为（基于测试验证）
+
+- Dispatcher 将原始流通过 `TransformStream` 包装，绑定到 Tracker 的 Handle。
+- 物理连接关闭（`rawRes.close`）→ 自动调用 `handle.abort('Physical connection closed')` → 流被取消。
+- 通过 `handle.abort(reason)` 取消 → 流被取消，原因透传给 `cancel` 回调。
+- 流正常结束（`flush`）→ Handle 根据 `retention` 策略自动清理。
+
+### 4.2 后台任务 + 轮询（使用内置 `rpcTask`）
+
+**服务端**：只返回 `requestId`，任务结果通过 `handle.resolve/reject` 通知 Tracker。
+
+```typescript
+new ServerTools({
+  name: 'long-task',
+  isApi: true,
+  func: async function (this: any, params: { data: number[] }) {
+    const requestId = this.ctx.requestId; // Dispatcher 自动生成
+    const handle = this.ctx.tracker.register(requestId, {
+      retention: 'once',        // 第一次查询后自动清除
+      maxRuntimeMs: 120_000,    // 硬死线 2 分钟
+    });
+    // 异步执行（不 await）
+    this.executeAsync(requestId, params.data, handle).catch(() => {});
+    return { requestId };       // 客户端据此轮询
+  },
+  async executeAsync(requestId: string, data: number[], handle: any) {
+    try {
+      let total = 0;
+      for (let i = 0; i < data.length; i++) {
+        await new Promise(r => setTimeout(r, 1000));
+        if (handle.signal.aborted) throw new Error('Task aborted');
+        total += data[i] * 2;
+      }
+      handle.resolve(total);
+    } catch (err: any) {
+      handle.reject(err);
+    }
   },
 }).register();
 ```
 
-**客户端用法:**
+**客户端**：通过系统内置的 `rpcTask` 工具轮询。
 
 ```typescript
-// client.ts
-const uuidTool = ClientTools.get('local-uuid');
-// 此调用将执行下载的函数体，不会发起网络请求。
-const uuid = await uuidTool.run();
-console.log('生成的 UUID:', uuid);
+const rpcTask = ClientTools.get('rpcTask') as any;
+const longTask = ClientTools.get('long-task') as any;
+const init = await longTask.run({ data: [1, 2, 3] });
+const taskId = init.requestId;
+
+let finished = false;
+while (!finished) {
+  await new Promise(r => setTimeout(r, 2000));
+  try {
+    const result = await rpcTask.get({ resId: taskId });
+    console.log('Result:', result);
+    finished = true;
+  } catch (err: any) {
+    if (err.status === 102) {
+      // 继续轮询
+    } else if (err.status === 404) {
+      console.log('Task expired');
+      finished = true;
+    } else if (err.status === 408) {
+      console.log('Task terminated');
+      finished = true;
+    } else {
+      throw err;
+    }
+  }
+}
 ```
 
-### 自动 RESTful 方法路由
+**取消任务**：
+```typescript
+await rpcTask.cancel({ resId: taskId });
+```
 
-当使用 `ResServerTools` 时，框架会智能地路由传入的 HTTP 请求。它会检查 HTTP 方法和 `id` 参数是否存在，以确定调用哪个函数。这个逻辑由工具内部的 `getMethodFromParams` 处理，提供了以下开箱即用的映射：
+### 4.3 使用 Mailbox 传输层
 
-- `GET /api/my-resource` → `list()`
-- `GET /api/my-resource/123` → `get({ id: '123' })`
-- `POST /api/my-resource` → `post({ val: ... })`
+Mailbox 传输层适用于跨进程/线程通信，无需 HTTP 服务器。需要安装 `@mboxlabs/mailbox` 包。
 
-这使您能够编写干净、面向资源的代码，而无需担心手动路由。
+**服务端**：
+```typescript
+import { Mailbox, MemoryProvider } from '@mboxlabs/mailbox';
+import { MailboxServerTransport, RpcServerDispatcher, RpcActiveTaskTracker, ServerTools } from '@isdk/tool-rpc';
 
-### 混合 RESTful 和 RPC 工具
+const mailbox = new Mailbox();
+mailbox.registerProvider(new MemoryProvider());
 
-由于 `ResServerTools` 继承自 `RpcMethodsServerTool`，您可以在单个工具中结合两种 API 风格。您可以实现标准的 RESTful 方法（`get`, `list`），同时添加自定义的 RPC 风格方法（例如 `$archive`, `$publish`）来处理不符合 CRUD 模型的特定业务操作。
+const serverAddr = 'mem://bot@mailbox/api/v1';
+const tracker = new RpcActiveTaskTracker();
+const dispatcher = new RpcServerDispatcher({ registry: ServerTools.items, tracker });
+const transport = new MailboxServerTransport({ mailbox, apiUrl: serverAddr, dispatcher });
 
-### 自动参数类型转换
+// 注册工具（同前）
+new ServerTools({ name: 'greet', isApi: true, func: ({ name }: { name: string }) => `Hello, ${name}!` }).register();
 
-您在工具上定义的 `params` 模式不仅仅用于文档。服务器会自动使用它来将传入的参数转换为其指定的类型。例如，如果您定义 `id: { type: 'number' }`，任何从 URL 路径（这是一个字符串）接收到的 `id` 将在调用您的函数之前被转换为 `Number`。
+// 注册路由
+transport.addRpcHandler(serverAddr);
+transport.addDiscoveryHandler(serverAddr, () => ServerTools.toJSON());
 
-### 客户端方法别名
+// 启动
+RpcTransportManager.instance.addServer(transport);
+await RpcTransportManager.instance.startAll();
+```
 
-为了方便起见，当您在服务器上用 `$` 前缀定义一个方法时（例如 `$promoteUser`），客户端代理会自动创建一个不带前缀的更清晰的别名。这允许您在客户端上调用 `myTool.promoteUser(...)`，使代码更具可读性和惯用性。
+**客户端**：
+```typescript
+import { Mailbox, MemoryProvider } from '@mboxlabs/mailbox';
+import { MailboxClientTransport, RpcTransportManager, ClientTools } from '@isdk/tool-rpc';
 
-## 🤝 贡献
+const mailbox = new Mailbox();
+mailbox.registerProvider(new MemoryProvider());
 
-我们欢迎各种形式的贡献！请阅读 [CONTRIBUTING.md](./CONTRIBUTING.md) 文件以获取有关如何开始的指南。
+const transport = new MailboxClientTransport({
+  mailbox,
+  apiUrl: 'mem://bot@mailbox/api/v1',
+  clientAddress: 'mem://client/inbox', // 客户端收件箱地址
+});
 
-## 📄 许可证
+RpcTransportManager.bindScheme('mem', () => transport); // 或直接使用实例
+await ClientTools.loadFrom(undefined, { apiUrl: 'mem://bot@mailbox/api/v1' });
 
-该项目根据 MIT 许可证授权。有关更多详细信息，请参阅 [LICENSE-MIT](./LICENSE-MIT) 文件。
+const greet = ClientTools.get('greet');
+const result = await greet.run({ name: 'World' });
+console.log(result); // "Hello, World!"
+```
+
+**注意**：
+- Mailbox 传输层**不支持流式响应**（`canStream` 为 `false`），如果工具返回流会收到 400 错误。
+- `clientAddress` 必须指定，用于服务端回调或状态通知。
+- 需要确保服务端和客户端使用同一个 `Mailbox` 实例或相同 Provider（如内存、Redis 等）。
+
+### 4.4 自定义传输层
+
+实现 `IServerToolTransport` 或 `IClientToolTransport` 接口。例如集成 Fastify：
+
+```typescript
+class FastifyServerTransport implements IServerToolTransport {
+  // 必须实现：getListenAddr(), getRoutes(), start(), stop()
+  // 以及 addRpcHandler(), addDiscoveryHandler() 等
+}
+```
+
+### 4.5 多实例与测试隔离
+
+```typescript
+// 创建独立 Manager 实例（非全局单例）
+const manager = new RpcTransportManager();
+const dispatcher = new RpcServerDispatcher({ tracker: new RpcActiveTaskTracker() });
+const transport = new HttpServerToolTransport({ apiUrl: 'http://localhost:3001/', dispatcher });
+manager.addServer(transport);
+await manager.startAll();
+```
+
+## 五、关键注意事项
+
+### 5.1 路径规范化
+所有逻辑路由必须以 `/` 结尾（Trailing Slash Normalization），否则路由匹配可能失败。
+
+### 5.2 影子实例隔离
+Dispatcher 在执行时为每个请求创建 `Object.create(tool)` 的影子实例，`this.ctx` 仅属于本次调用。**严禁在工具函数中修改原始对象的属性**。
+
+### 5.3 物理连接关闭自动清理
+传输层（如 `HttpServerToolTransport`）监听 `rawRes.close` 事件，自动调用 `handle.abort('Physical connection closed')`。这适用于流式响应和后台任务，无需手动处理。
+
+### 5.4 requestId 唯一性
+`requestId` 由 Dispatcher 自动生成（可通过 `this.ctx.requestId` 获取）。重复提交会收到 409 错误。
+
+### 5.5 能力协商
+- 工具声明 `stream: true` 才支持流式输出。
+- 客户端请求流但工具不支持 → 返回 400。
+- 传输层不支持流（如 Mailbox）但工具返回流 → 返回 400。
+
+### 5.6 不要手动注册 `RpcTaskResource`
+它由 `RpcServerDispatcher` 在初始化时自动注册到 `systemRegistry`。手动注册会导致重复注册错误。
+
+### 5.7 超时与死线
+- **软死线**：触发 102 Processing，任务转入后台（需设置 `keepAliveOnTimeout: true`）。
+- **硬死线**：触发 408 Terminated，强制中止任务。
+- 通过 `timeout` 配置对象设置：`{ value: 8000, keepAliveOnTimeout: true }`。
+
+### 5.8 结果保留策略
+- `retention: 'once'` 时，第一次成功 `get` 后任务被逻辑删除（`fetchCount++` 触发清理）。
+- 如需多次查询，使用 `Permanent` 或指定保留时长。
+
+### 5.9 错误处理
+推荐抛出 `RpcError`（`new RpcError(message, code, status?, data?)`），Dispatcher 会自动映射为标准化错误响应。
+
+### 5.10 `isStream` 的正确使用
+- 必须使用 `function` 声明（非箭头函数），以保证 `this` 指向工具实例。
+- 必须在 `params` 定义中显式声明 `stream` 参数，否则 `isStream` 会退化为静态 `stream` 属性。
+- 如果工具始终返回流，可以省略 `params.stream` 声明，此时 `isStream` 返回 `this.stream`（即 `true`）。
+
+## 六、完整示例代码
+
+完整可运行的服务端 + 客户端示例见本文档的“快速入门”和“进阶用法”章节。所有代码可直接复制使用。
+
+## 七、迁移指南（从旧版 v1.x 到 v2.6）
+
+| 旧版 | 新版 |
+|------|------|
+| `apiRoot` | `apiUrl`（完整 URL） |
+| `mount(tools)` | `addServer()` + `addRpcHandler()` |
+| 全局单例依赖 | 支持 `new RpcTransportManager()` 独立实例 |
+| 无任务追踪 | 内置 `RpcActiveTaskTracker` + `RpcTaskResource` |
+| 手动管理流生命周期 | 自动包装 TransformStream，物理连接联动 |
+| 自定义轮询端点 | 使用系统内置 `rpcTask` |
+
+**自动桥接**：旧版 `apiRoot` 会被包装为 `http://localhost/apiRoot`，旧版 `setTransport` 会注册到全局单例。
+
+## 八、附录：接口速查
+
+### 服务端关键接口
+
+```typescript
+interface IServerToolTransport {
+  getListenAddr(): string;          // 物理地址（如 ':3000'）
+  getRoutes(): string[];            // 逻辑路由列表（以 '/' 结尾）
+  start(): Promise<void>;
+  stop(): Promise<void>;
+  addRpcHandler(apiUrl: string): void;
+  addDiscoveryHandler(apiUrl: string, handler: Function): void;
+}
+```
+
+### 客户端关键接口
+
+```typescript
+interface IClientToolTransport {
+  call(request: ToolRpcRequest): Promise<ToolRpcResponse>;
+  // 可选：自动处理 102 轮询
+}
+```
+
+### 任务 Handle 关键方法
+
+```typescript
+interface RpcActiveTaskHandle {
+  state: 'pending' | 'processing' | 'completed' | 'error' | 'aborted';
+  result: any;
+  error?: Error;
+  signal: AbortSignal;
+  resolve(value: any): void;
+  reject(error: Error): void;
+  abort(reason?: string): void;
+  setOutputStream(stream: ReadableStream): void;
+}
+```

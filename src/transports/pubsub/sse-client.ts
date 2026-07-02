@@ -1,6 +1,6 @@
 import type { IPubSubClientTransport, PubSubClientStream } from './client';
 import type { PubSubCtx } from './base';
-import { genUrlParamsStr} from '@isdk/tool-rpc';
+import { genUrlParamsStr } from './gen-url-params';
 
 export class SseClientPubSubTransport implements IPubSubClientTransport {
   private apiRoot: string = '';
@@ -20,7 +20,7 @@ export class SseClientPubSubTransport implements IPubSubClientTransport {
     };
 
     // url can be a full URL or a path relative to apiRoot
-    let finalUrl = url.startsWith('http') ? url : `${this.apiRoot}/${url}`;
+    let finalUrl = url.startsWith('http') ? url : (this.apiRoot.endsWith('/') ? `${this.apiRoot}${url}` : `${this.apiRoot}/${url}`);
 
     if (connectParams) {
       const qs = genUrlParamsStr(connectParams as any, true);

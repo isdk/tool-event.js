@@ -3,7 +3,7 @@ import { findPort, sleep } from '@isdk/util';
 import { EventEmitter } from 'events-ex';
 
 import { ToolFunc, Funcs } from '@isdk/tool-func';
-import { HttpServerToolTransport, HttpClientToolTransport, ResClientTools, ResServerTools } from '@isdk/tool-rpc';
+import { HttpServerToolTransport, HttpClientToolTransport, ResClientTools, ResServerTools, RpcActiveTaskTracker, RpcServerDispatcher, RpcTransportManager } from '@isdk/tool-rpc';
 import { EventServer } from '../src/event-server';
 import { EventClient } from '../src/event-client';
 import { event as eventBusProvider } from '../src/event';
@@ -41,16 +41,23 @@ describe('EventTransport End-to-End Test', () => {
     ResServerTools.register(eventServer1);
     ResServerTools.register(eventServer2);
 
-    serverTransport = new HttpServerToolTransport();
-    serverTransport.mount(ResServerTools, '/api');
-
     const port = await findPort(3004);
+    apiRoot = `http://localhost:${port}/api/`;
+
+    const tracker = new RpcActiveTaskTracker()
+    const dispatcher = new RpcServerDispatcher({ registry: ResServerTools.items, tracker })
+
+    serverTransport = new HttpServerToolTransport({ apiUrl: apiRoot, dispatcher });
+    serverTransport.addDiscoveryHandler(apiRoot, () => ResServerTools.toJSON());
+    serverTransport.addRpcHandler(apiRoot);
+
     await serverTransport.start({ port, host: 'localhost' });
-    apiRoot = `http://localhost:${port}/api`;
 
     const clientTransport = new HttpClientToolTransport(apiRoot);
+    RpcTransportManager.instance.register(clientTransport);
     // Mount ResClientTools as the base class, since EventClient extends it.
-    await clientTransport.mount(EventClient);
+    clientTransport.mount(EventClient);
+    await EventClient.loadFrom();
 
     EventClient.setPubSubTransport(new SseClientPubSubTransport())
     EventServer.setPubSubTransport(new SseServerPubSubTransport())

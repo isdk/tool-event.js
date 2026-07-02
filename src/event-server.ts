@@ -1,6 +1,6 @@
 import { EventName, EventBusName } from './utils';
 import { event } from './event'
-import { type ServerFuncParams } from '@isdk/tool-rpc';
+import { type ServerFuncParams, type ToolRpcContext } from '@isdk/tool-rpc';
 import type { Event } from 'events-ex';
 import { ResServerTools } from '@isdk/tool-rpc';
 import { ErrorCode, throwError } from '@isdk/common-error';
@@ -11,7 +11,7 @@ const eventBus = event.runSync()
 
 export const ClientEventPrefix = 'client:'
 
-export interface EventServerFuncParams extends ServerFuncParams {
+export interface EventServerFuncParams {
   event?: string | string[]
   data?: any
   act?: 'sub' | 'pub' | 'unsub'
@@ -19,6 +19,8 @@ export interface EventServerFuncParams extends ServerFuncParams {
 }
 
 export class EventServer extends ResServerTools {
+  enableLegacyCompat = false;
+
   /**
    * Controls whether the client-published events are auto-emitted on server's localBus.
    * Defaults to false for security. Must be explicitly enabled for 'client:' prefixed events to be emitted.
@@ -98,31 +100,37 @@ export class EventServer extends ResServerTools {
     }
   }
 
-  list({ _req, _res, event}: EventServerFuncParams) {
+  list(params: EventServerFuncParams, context?: ToolRpcContext) {
     if (this.pubSubTransport) {
-      return this.pubSubTransport.connect({ req: _req, res: _res, events: event as string[] })
+      const ctx = context || this.ctx;
+      const req = ctx?.req;
+      const res = ctx?.reply;
+      return this.pubSubTransport.connect({ req, res, events: params.event as string[] })
     } else {
       throwError('PubSub transport not available', 'list', ErrorCode.NotImplemented)
     }
   }
 
-  $sub({event, _req}: EventServerFuncParams) {
+  $sub(params: EventServerFuncParams, context?: ToolRpcContext) {
     if (!this.pubSubTransport) {
       throwError('PubSub transport not available', 'sub', ErrorCode.NotImplemented);
     }
 
+    const event = params.event;
     if (event) {
       this.forward(event);
 
-      const session = _req && this.pubSubTransport.getSessionFromReq?.(_req);
+      const ctx = context || this.ctx;
+      const req = ctx?.req;
+      const session = req && this.pubSubTransport.getSessionFromReq?.(req);
       if (session) {
         this.pubSubTransport.subscribe(session, Array.isArray(event) ? event : [event]);
         return { forward: true, subscribed: true, event, clientId: session.clientId };
       } else {
         if (this.pubSubTransport.getSessionFromReq) {
           console.warn('$sub: No session found for request');
-        } else if (!_req) {
-          console.warn(`$sub: missing _req`);
+        } else if (!req) {
+          console.warn(`$sub: missing req`);
         } else {
           console.warn(`$sub: The ${this.pubSubTransport.name} Transport does not support dynamic subscription`);
         }
@@ -133,14 +141,17 @@ export class EventServer extends ResServerTools {
     }
   }
 
-  $unsub({event, _req}: EventServerFuncParams) {
+  $unsub(params: EventServerFuncParams, context?: ToolRpcContext) {
     if (!this.pubSubTransport) {
       throwError('PubSub transport not available', 'unsub', ErrorCode.NotImplemented);
     }
 
+    const event = params.event;
     if (event) {
       this.unforward(event);
-      const session = _req && this.pubSubTransport.getSessionFromReq?.(_req);
+      const ctx = context || this.ctx;
+      const req = ctx?.req;
+      const session = req && this.pubSubTransport.getSessionFromReq?.(req);
 
       if (session) {
         this.pubSubTransport.unsubscribe(session, Array.isArray(event) ? event : [event]);
@@ -148,8 +159,8 @@ export class EventServer extends ResServerTools {
       } else {
         if (this.pubSubTransport.getSessionFromReq) {
           console.warn('$unsub: No session found for request');
-        } else if (!_req) {
-          console.warn(`$sub: missing _req`);
+        } else if (!req) {
+          console.warn(`$sub: missing req`);
         } else {
           console.warn(`$unsub: The ${this.pubSubTransport.name} Transport does not support dynamic subscription`);
         }
@@ -160,11 +171,15 @@ export class EventServer extends ResServerTools {
     }
   }
 
-  $publish({event: events, data, _req}: EventServerFuncParams) {
+  $publish(params: EventServerFuncParams, context?: ToolRpcContext) {
+    let events = params.event;
+    const data = params.data;
     if (events && data) {
       // Get the session and clientId from the transport, not from the client payload.
       // This is a critical security measure to prevent impersonation.
-      const session = _req && this.pubSubTransport?.getSessionFromReq?.(_req);
+      const ctx = context || this.ctx;
+      const req = ctx?.req;
+      const session = req && this.pubSubTransport?.getSessionFromReq?.(req);
       const senderId = session?.clientId;
       const ctor = this.constructor as typeof EventServer;
 
@@ -189,8 +204,8 @@ export class EventServer extends ResServerTools {
     }
   }
 
-  isStream(params: ServerFuncParams) {
-    const method = this.getMethodFromParams(params)
+  isStream(params: ServerFuncParams, context?: ToolRpcContext) {
+    const method = this.getMethodFromParams(params, context)
     return (method === 'list')
   }
 }

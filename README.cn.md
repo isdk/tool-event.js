@@ -384,9 +384,11 @@ EventServer.setPubSubTransport(wsTransport); // 新的
 
 ```typescript
 // --- 在您的应用程序主设置文件中 (例如, server.ts 或 client.ts) ---
-import { EventServer, EventClient, backendEventable, EventBusName } from '@isdk/tool-event';
+import {
+  EventServer, EventClient, backendEventable, EventBusName,
+  event /* 返回同一个 emitter 的工具函数 */
+} from '@isdk/tool-event';
 import { ToolFunc, ClientTools } from '@isdk/tool-func'; // 添加了 ClientTools
-import { event } from 'events-ex';
 
 // 1. 增强 EventServer 类本身，使其具备事件感知能力。
 // 这会“修补”该类，因此任何 EventServer 实例现在都可以使用 `this.emit()`。
@@ -394,9 +396,8 @@ backendEventable(EventServer);
 
 // 2. 增强 EventClient 类，使其具备事件感知能力。
 // 这使得 EventClient 实例成为一个功能强大的本地事件总线，并连接到服务器。
-const EventBusClientName = 'event-bus-client'; // 如 test/event-server.test.ts 中所示
+const EventBusClientName = 'event-bus-client'; // 当将EventServer和EventCLient放入同一文件中时（用于测试），需要避免eventBusName冲突。
 backendEventable(EventClient, { eventBusName: EventBusClientName });
-
 
 // (可选) 增强一个自定义服务类
 class MyCustomService extends ToolFunc {
@@ -412,13 +413,13 @@ backendEventable(MyCustomService);
 // --- 稍后，在服务器初始化期间 (server.ts) ---
 
 async function startServer() {
-  // 设置共享事件总线 (一次性设置)。
+  // 设置共享事件总线 (一次性设置), 这是 tool-func 返回的是 emitter。
   const eventBus = event.runSync();
   new ToolFunc(EventBusName, { tools: { emitter: eventBus } }).register();
 
-  // 实例化您增强后的类。
-  const eventTool = new EventServer('event');
-  eventTool.register();
+  // 供server端使用的
+  const serverEventTool = new EventServer('event')
+  serverEventTool.register()
 
   const myService = new MyCustomService();
   myService.register();
@@ -447,6 +448,10 @@ async function startClient() {
   // 设置客户端事件总线 (一次性设置)。
   const clientEventBus = event.runSync();
   new ToolFunc(EventBusClientName, { tools: { emitter: clientEventBus } }).register();
+
+  // 供client端使用的
+  const clientEventTool = new EventClient('event')
+  clientEventTool.register()
 
   // 将 EventClient 注册到 ClientTools (如 test/event-server.test.ts 中所示)
   const event4Client = new EventClient('event');
