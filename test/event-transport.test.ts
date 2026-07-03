@@ -53,8 +53,7 @@ describe('EventTransport End-to-End Test', () => {
 
     await serverTransport.start({ port, host: 'localhost' });
 
-    const clientTransport = new HttpClientToolTransport(apiRoot);
-    RpcTransportManager.instance.register(clientTransport);
+    RpcTransportManager.bindScheme('http', HttpClientToolTransport);
     EventClient.apiUrl = apiRoot
     await EventClient.loadFrom();
 

@@ -2,7 +2,7 @@
 import { describe, expect, it, vi, beforeAll, afterAll } from 'vitest'
 import { findPort, sleep } from '@isdk/util'
 import { Funcs, ToolFunc } from '@isdk/tool-func'
-import { ClientTools, HttpServerToolTransport, HttpClientToolTransport, ServerTools, RpcActiveTaskTracker, RpcServerDispatcher, RpcTransportManager } from '@isdk/tool-rpc'
+import { ClientTools, HttpServerToolTransport, HttpClientToolTransport, ServerTools, RpcTransportManager } from '@isdk/tool-rpc'
 import { EventServer, EventClient, event, EventToolFunc, ClientEventPrefix } from '../src'
 import { EventBusName, EventName, backendEventable } from "../src/utils"
 import { SseClientPubSubTransport, SseServerPubSubTransport } from "../src/transports/pubsub"
@@ -57,8 +57,7 @@ describe('Event Server api', () => {
 
     await server.start({ port })
 
-    const clientTransport = new HttpClientToolTransport(apiRoot);
-    RpcTransportManager.instance.register(clientTransport)
+    RpcTransportManager.bindScheme('http', HttpClientToolTransport)
     ClientTools.apiUrl = apiRoot
     await ClientTools.loadFrom()
 
