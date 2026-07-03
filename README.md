@@ -39,10 +39,11 @@ EventServer.setPubSubTransport(new SseServerPubSubTransport());
 // 2. Register the pre-instantiated EventServer instance (default name is 'event')
 eventServer.register();
 
-// 3. Start the HTTP server and mount tools at the /api path
+// 3. Start the HTTP server with RPC and discovery handlers
 const server = new HttpServerToolTransport();
-server.mount(ServerTools, '/api');
-server.start({ port: 3000 });
+server.addRpcHandler('/api');
+server.addDiscoveryHandler('/api', () => ServerTools.toJSON());
+await server.start({ port: 3000 });
 
 console.log('Event server started at: http://localhost:3000/api');
 
@@ -66,12 +67,16 @@ async function main() {
   // 1. Set up the client-side SSE transport
   EventClient.setPubSubTransport(new SseClientPubSubTransport());
 
-  // 2. Initialize the client transport and connect to the remote server
-  const clientTransport = new HttpClientToolTransport(apiRoot);
-  await clientTransport.mount(ClientTools);
+  // 2. Configure the client API URL and load remote tool definitions
+  ClientTools.apiUrl = apiRoot;
+  await ClientTools.loadFrom();
 
   // 3. Subscribe to and listen for the 'server-time' event (using the exported eventClient)
   await eventClient.subscribe('server-time');
+
+  // Note: The EventClient instance must also be registered locally
+  // for the proxy methods (publish, subscribe, etc.) to work.
+  eventClient.register();
   
   eventClient.on('server-time', (data) => {
     console.log('Received server time:', data.time);

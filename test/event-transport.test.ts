@@ -55,8 +55,7 @@ describe('EventTransport End-to-End Test', () => {
 
     const clientTransport = new HttpClientToolTransport(apiRoot);
     RpcTransportManager.instance.register(clientTransport);
-    // Mount ResClientTools as the base class, since EventClient extends it.
-    clientTransport.mount(EventClient);
+    EventClient.apiUrl = apiRoot
     await EventClient.loadFrom();
 
     EventClient.setPubSubTransport(new SseClientPubSubTransport())

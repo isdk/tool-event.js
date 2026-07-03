@@ -34,7 +34,7 @@ function getEventableClass(Backend: any, options?: {eventBusName?: string}) {
 
     public get emitter() {
       const ctor = (this.constructor as unknown as typeof BackendEventable)
-      return ctor._emitter
+      return ctor.emitter
     }
 
 

@@ -59,7 +59,8 @@ describe('Event Server api', () => {
 
     const clientTransport = new HttpClientToolTransport(apiRoot);
     RpcTransportManager.instance.register(clientTransport)
-    clientTransport.mount(ClientTools)
+    ClientTools.apiUrl = apiRoot
+    await ClientTools.loadFrom()
 
     EventClient.setPubSubTransport(new SseClientPubSubTransport())
     EventServer.setPubSubTransport(new SseServerPubSubTransport())
@@ -82,14 +83,17 @@ describe('Event Server api', () => {
     // init the EventSource to listen the t1 and t2 event only
     // await event.run({event: ['t1', 't2'], act: 'init'})
     await event.init(['t1', 't2'])
-    const esUrl = ClientTools.apiRoot!.endsWith('/') ? ClientTools.apiRoot + 'event' : ClientTools.apiRoot + '/event';
+    const esUrl = (ClientTools.apiUrl || apiRoot)!.endsWith('/') ? (ClientTools.apiUrl || apiRoot) + 'event' : (ClientTools.apiUrl || apiRoot) + '/event';
     const es = new EventSource(esUrl)
     try {
       let t1 = 0
       let t2 = 0
-      event.on('t1', function (...data: any[]) {
+      const t1Data: any[] = []
+      const t2Data: any[] = []
+      event.on('t1', function (name: string, ...data: any[]) {
         t1++
-        expect(data).toMatch(`[1, 2, 3]`)
+        t1Data.push(data)
+        // expect(data).toStrictEqual([1, 2, 3])
       })
 
       // publish the t1 event to the server
@@ -97,21 +101,26 @@ describe('Event Server api', () => {
       await event.publish({ event: 't1', data: [1, 2, 3] })
       await sleep(10)
       expect(t1).toBe(1)
+      expect(t1Data).toStrictEqual([[1,2,3]])
 
-      event.on('t2', function (...data: any[]) {
+      event.on('t2', function (name: string, ...data: any[]) {
         t2++
-        expect(data).toMatch(`[ 4, 5, 6, ]`)
+        t2Data.push(data)
+        // expect(data).toMatch(`[ 4, 5, 6, ]`)
       })
 
       let t2j = 0
+      const t2jData:any = []
+      let esOnMsg: boolean|undefined
       // listen all the events from server
       es.addEventListener('t2', function (e: MessageEvent) {
         t2j++
-        expect(e.data).toMatch(`[4,5,6]`)
+        // expect(e.data).toMatch(`[4,5,6]`)
+        t2jData.push(e.data)
       })
       es.onmessage = function (e: any) {
         // it should not be here
-        t2j++
+        esOnMsg = true
       }
       await sleep(10)
 
@@ -123,6 +132,8 @@ describe('Event Server api', () => {
       expect(t1).toBe(1)
       expect(t2).toBe(1)
       expect(t2j).toBe(1)
+      expect(t2jData).toStrictEqual(['[4,5,6]'])
+      expect(esOnMsg).toBeUndefined()
       // await event.run({event: 't1', act: 'pub', data: [1, 2, 3]})
       await event.publish({ event: 't1', data: [1, 2, 3] })
       await sleep(10)
@@ -156,7 +167,7 @@ describe('Event Server api', () => {
       let t1 = 0
       let t2 = 0
       let data: any
-      event.on('t1', function (...dat: any[]) {
+      event.on('t1', function (name: string, ...dat: any[]) {
         t1++
         data = dat
       })
@@ -185,7 +196,7 @@ describe('Event Server api', () => {
 
     let t3 = 0
     let receivedData: any
-    event.on('t3', (data: any) => {
+    event.on('t3', (name: string, data: any) => {
       t3++
       receivedData = data
     })

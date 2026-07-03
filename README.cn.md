@@ -39,10 +39,11 @@ EventServer.setPubSubTransport(new SseServerPubSubTransport());
 // 2. 注册预设的 EventServer 实例 (其实例名称 eventServer.name 默认为 'event')
 eventServer.register();
 
-// 3. 启动 HTTP 服务器并挂载工具到 /api 路径
+// 3. 启动 HTTP 服务器，注册 RPC 处理和服务发现
 const server = new HttpServerToolTransport();
-server.mount(ServerTools, '/api');
-server.start({ port: 3000 });
+server.addRpcHandler('/api');
+server.addDiscoveryHandler('/api', () => ServerTools.toJSON());
+await server.start({ port: 3000 });
 
 console.log('事件服务端已启动：http://localhost:3000/api');
 
@@ -66,12 +67,13 @@ async function main() {
   // 1. 设置客户端 SSE 传输层
   EventClient.setPubSubTransport(new SseClientPubSubTransport());
 
-  // 2. 初始化客户端传输层并连接到远程服务端
-  const clientTransport = new HttpClientToolTransport(apiRoot);
-  await clientTransport.mount(ClientTools);
+  // 2. 配置客户端 API URL 并加载远程工具定义
+  ClientTools.apiUrl = apiRoot;
+  await ClientTools.loadFrom();
 
   // 3. 订阅并监听 'server-time' 事件 (直接使用导出的 eventClient 实例)
   await eventClient.subscribe('server-time');
+  eventClient.register();
 
   eventClient.on('server-time', (data) => {
     console.log('收到服务器推送的时间:', data.time);

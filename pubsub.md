@@ -165,8 +165,9 @@ async function main() {
   eventServer.register();
 
   const serverTransport = new HttpServerToolTransport();
-  // Mount the base class; the transport finds all registered tools
-  serverTransport.mount(ResServerTools, '/api');
+  // Register RPC and discovery handlers
+  serverTransport.addRpcHandler('/api');
+  serverTransport.addDiscoveryHandler('/api', () => ResServerTools.toJSON());
 
   // ... start server
   await serverTransport.start({port: 3000})
@@ -175,7 +176,7 @@ async function main() {
 
 ### Client-Side Setup (SSE)
 
-On the client, the setup is designed to be simple and robust. You set up your main RPC transport first, and then you set the PubSub transport. The `EventClient` is smart enough to automatically configure the PubSub transport with the `apiRoot` from the main transport.
+On the client, the setup is designed to be simple and robust. You set the `apiUrl` and then call `loadFrom()` to discover server tools, then set the PubSub transport. The `EventClient` is smart enough to automatically configure the PubSub transport with the `apiUrl`.
 
 ```typescript
 // In your client-side code
@@ -190,13 +191,13 @@ import {
 
 async function main() {
   const apiRoot = 'http://localhost:3000/api';
-  const clientTransport = new HttpClientToolTransport();
-  // Mount the main transport, which configures the static ClientTools.apiRoot
-  await clientTransport.mount(ResClientTools, apiRoot);
+  // Set the apiUrl and load server tool definitions
+  ResClientTools.apiUrl = apiRoot;
+  await ResClientTools.loadFrom();
 
   // **Crucial Step 1: Set the PubSub transport for the client**
-  // It is **critical** that `setPubSubTransport` is called *after* the main
-  // transport has been mounted, as this is what makes the `apiRoot` available
+  // It is **critical** that `setPubSubTransport` is called *after* the `apiUrl`
+  // has been set, as this is what makes the `apiUrl` available
   // for automatic configuration.
   EventClient.setPubSubTransport(new SseClientPubSubTransport());
 
@@ -261,8 +262,8 @@ const pubSubNamespace = 'my-app-events';
 EventClient.setPubSubTransport(new ElectronClientPubSubTransport());
 
 // 3. **Crucial Step: Configure the EventClient with the namespace.**
-// This is used as the 'apiRoot' to determine which IPC channels to use.
-EventClient.apiRoot = pubSubNamespace;
+// This is used as the 'apiUrl' to determine which IPC channels to use.
+EventClient.apiUrl = pubSubNamespace;
 
 // 4. Make the client eventable and register it.
 backendEventable(EventClient);
@@ -329,7 +330,8 @@ const channelNamespace = 'my-app';
 // --- 1. Setup IPC for standard RPC ---
 const rpcTransport = new IpcServerToolTransport();
 // This sets up handlers for 'my-app:discover' and 'my-app:rpc'.
-rpcTransport.mount(ResServerTools, channelNamespace);
+rpcTransport.addRpcHandler(channelNamespace);
+rpcTransport.addDiscoveryHandler(channelNamespace, () => ResServerTools.toJSON());
 rpcTransport.start();
 console.log(`[Main] RPC transport started on namespace: ${channelNamespace}`);
 
@@ -386,12 +388,13 @@ async function main() {
 
   // Use the secure RPC transport
   const rpcTransport = new SecureIpcRpcTransport();
-  await rpcTransport.mount(ResClientTools, channelNamespace);
+  ResClientTools.apiUrl = channelNamespace;
+  await ResClientTools.loadFrom();
 
   // Use the secure Pub/Sub transport
   const pubsubTransport = new SecureIpcPubSubTransport();
   EventClient.setPubSubTransport(pubsubTransport);
-  EventClient.apiRoot = channelNamespace;
+  EventClient.apiUrl = channelNamespace;
 
   backendEventable(EventClient);
   eventClient.register();

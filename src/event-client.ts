@@ -91,7 +91,7 @@ export class EventClient extends ResClientTools {
   // pass server sent event to eventBus if any
   esListener(evtType: string, data: any, ctx?: PubSubCtx) {
     if (!this._forwardEvents.has(evtType)) {
-      const emitter = this.emitter
+      const emitter = (this as any).emit ? this : (this as any).emitter
       if (emitter && evtType) {
         if (Array.isArray(data)) emitter.emit(evtType, ...data)
         else emitter.emit(evtType, data)
@@ -106,18 +106,19 @@ export class EventClient extends ResClientTools {
     // 默认约定只有一个 data object 参数
     let data = args[1]
     const event = this.type
+    const target: any = this.target
     // 如果 emit 不遵循约定，就全部参数作为 data
     if (typeof funcName !== 'string' || (data && typeof data !== 'object') || args.length > 2) {
       data = args
       // 如果第一个参数是 this.name, 那么第忽略第一个参数，再传
-      if (funcName && funcName === this.target.name) {
+      if (funcName && funcName === target.name) {
         data = args.slice(1)
       }
     }
 
     // when receive the event from SSE, the target is no publish method.
-    if (this.target.publish) {
-      await this.target.publish({data, event})
+    if (target.publish) {
+      await target.publish({data, event})
     }
   }
 
