@@ -78,7 +78,7 @@ export class EventServer extends ResServerTools {
     const ctor = this.constructor as typeof EventServer
     if (!ctor._boundEbListener) {
       ctor._boundEbListener = function _ebListener(this: Event, ...data: any[]) {
-        return ctor.ebListener(this.type, ...data)
+        return ctor.ebListener(this.type!, ...data)
       }
     }
     for (const event of events) {
