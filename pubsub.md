@@ -149,13 +149,8 @@ On the server, you must set the desired PubSub transport on the `EventServer` cl
 
 ```typescript
 // In your server entry file (e.g., server.ts)
-import {
-  eventServer,
-  HttpServerToolTransport, // Using a generic HTTP transport
-  ResServerTools,
-  EventServer, // Import EventServer class
-  SseServerPubSubTransport // Import the SSE transport
-} from '@isdk/ai-tool';
+import { EventServer, eventServer, SseServerPubSubTransport } from '@isdk/tool-event';
+import { ServerTools, HttpServerToolTransport } from '@isdk/tool-rpc';
 
 async function main() {
   // **Crucial Step: Set the PubSub transport for the server**
@@ -167,7 +162,7 @@ async function main() {
   const serverTransport = new HttpServerToolTransport();
   // Register RPC and discovery handlers
   serverTransport.addRpcHandler('/api');
-  serverTransport.addDiscoveryHandler('/api', () => ResServerTools.toJSON());
+  serverTransport.addDiscoveryHandler('/api', () => ServerTools.toJSON());
 
   // ... start server
   await serverTransport.start({port: 3000})
@@ -180,20 +175,14 @@ On the client, the setup is designed to be simple and robust. You set the `apiUr
 
 ```typescript
 // In your client-side code
-import {
-  backendEventable,
-  EventClient,
-  eventClient,
-  HttpClientToolTransport,
-  ResClientTools,
-  SseClientPubSubTransport // Import the SSE transport
-} from '@isdk/ai-tool';
+import { EventClient, eventClient, SseClientPubSubTransport, backendEventable } from '@isdk/tool-event';
+import { ClientTools } from '@isdk/tool-rpc';
 
 async function main() {
   const apiRoot = 'http://localhost:3000/api';
   // Set the apiUrl and load server tool definitions
-  ResClientTools.apiUrl = apiRoot;
-  await ResClientTools.loadFrom();
+  ClientTools.apiUrl = apiRoot;
+  await ClientTools.loadFrom();
 
   // **Crucial Step 1: Set the PubSub transport for the client**
   // It is **critical** that `setPubSubTransport` is called *after* the `apiUrl`
@@ -213,6 +202,8 @@ async function main() {
 
 For desktop applications built with Electron, the event system can operate over the built-in Inter-Process Communication (IPC) channels. This provides a highly efficient, real-time backend within your application shell without needing an HTTP server.
 
+> 💡 The transports shown in this section (`ElectronServerPubSubTransport`, `ElectronClientPubSubTransport`, `IpcServerToolTransport`, `IpcClientToolTransport`) are **not included in `@isdk/tool-event`**. They serve as conceptual examples to illustrate how the pluggable transport architecture works. To use these transports, you would need to implement them following the `IPubSubServerTransport` / `IPubSubClientTransport` interfaces, or install a separate extension package.
+
 We will cover two scenarios: using IPC for Pub/Sub only, and a fully integrated approach where both RPC and Pub/Sub use IPC.
 
 ### Scenario 1: Standalone Pub/Sub over IPC
@@ -225,7 +216,7 @@ You only need to set up the `ElectronServerPubSubTransport` and tell it to start
 
 ```typescript
 // In your main Electron process (e.g., main.ts)
-import { EventServer, ElectronServerPubSubTransport } from '@isdk/ai-tool';
+import { EventServer, ElectronServerPubSubTransport } from '@isdk/tool-event';
 
 // 1. Define a unique namespace for your pub/sub channels.
 const pubSubNamespace = 'my-app-events';
@@ -253,7 +244,7 @@ The client setup is also straightforward. You must configure the `EventClient` w
 
 ```typescript
 // In your client-side code (e.g., renderer.ts)
-import { EventClient, eventClient, ElectronClientPubSubTransport, backendEventable } from '@isdk/ai-tool';
+import { EventClient, eventClient, ElectronClientPubSubTransport, backendEventable } from '@isdk/tool-event';
 
 // 1. Use the same namespace as the server.
 const pubSubNamespace = 'my-app-events';
@@ -272,7 +263,7 @@ eventClient.register();
 // 5. Subscribe to events. This automatically triggers the connection to the main process.
 await eventClient.subscribe('server-tick');
 
-eventClient.on('server-tick', (data) => {
+eventClient.on('server-tick', (name, data) => {
   console.log('Received tick from main process:', data);
   document.body.innerHTML = `Tick received at: ${data.timestamp}`;
 });
@@ -320,9 +311,9 @@ Here, we set up both the `IpcServerToolTransport` for RPC and the `ElectronServe
 
 ```typescript
 // main.ts
-import { IpcServerToolTransport } from '@isdk/ai-tool';
-import { ElectronServerPubSubTransport } from '@isdk/ai-tool';
-import { EventServer, ResServerTools, eventServer } from '@isdk/ai-tool';
+import { EventServer, eventServer } from '@isdk/tool-event';
+import { IpcServerToolTransport, ServerTools } from '@isdk/tool-rpc';
+import { ElectronServerPubSubTransport } from '@isdk/tool-event';
 
 // Use a single, consistent namespace for all IPC channels
 const channelNamespace = 'my-app';
@@ -331,7 +322,7 @@ const channelNamespace = 'my-app';
 const rpcTransport = new IpcServerToolTransport();
 // This sets up handlers for 'my-app:discover' and 'my-app:rpc'.
 rpcTransport.addRpcHandler(channelNamespace);
-rpcTransport.addDiscoveryHandler(channelNamespace, () => ResServerTools.toJSON());
+rpcTransport.addDiscoveryHandler(channelNamespace, () => ServerTools.toJSON());
 rpcTransport.start();
 console.log(`[Main] RPC transport started on namespace: ${channelNamespace}`);
 
@@ -352,7 +343,9 @@ The renderer will use the `electronApi` exposed by the preload script. To make t
 
 ```typescript
 // renderer.ts
-import { IpcClientToolTransport, ElectronClientPubSubTransport, EventClient, ResClientTools, eventClient, backendEventable } from '@isdk/ai-tool';
+import { EventClient, eventClient, backendEventable } from '@isdk/tool-event';
+import { IpcClientToolTransport, ClientTools } from '@isdk/tool-rpc';
+import { ElectronClientPubSubTransport } from '@isdk/tool-event';
 import type { ElectronApi } from './preload';
 
 // Make the bridged API available on the window object for TypeScript
@@ -388,8 +381,8 @@ async function main() {
 
   // Use the secure RPC transport
   const rpcTransport = new SecureIpcRpcTransport();
-  ResClientTools.apiUrl = channelNamespace;
-  await ResClientTools.loadFrom();
+  ClientTools.apiUrl = channelNamespace;
+  await ClientTools.loadFrom();
 
   // Use the secure Pub/Sub transport
   const pubsubTransport = new SecureIpcPubSubTransport();
@@ -401,7 +394,7 @@ async function main() {
 
   // Now you can use RPC and Pub/Sub together seamlessly and securely!
   await eventClient.subscribe('server-time');
-  eventClient.on('server-time', (data) => {
+  eventClient.on('server-time', (name, data) => {
     console.log('Received time from main:', data);
   });
 }
@@ -424,8 +417,8 @@ There are two ways to send events from the server to clients: through the global
 The recommended and most common way to send events is to emit them on the global `eventBus`. You can configure the `eventServer` to automatically listen for specific events on this bus and forward them to subscribed clients. This creates a clean, decoupled architecture.
 
 ```typescript
-import { eventServer } from '@isdk/ai-tool';
-import { event } from '@isdk/ai-tool/funcs/event'; // The global eventBus
+import { eventServer } from '@isdk/tool-event';
+import { event } from '@isdk/tool-event'; // The global eventBus
 
 const eventBus = event.runSync();
 
@@ -445,7 +438,7 @@ For special cases where you need to bypass the global `eventBus` and send an eve
 This is an advanced feature. For it to work correctly, the client must have explicitly registered its interest in the event at the transport level, typically by using `eventClient.init(['event-name'])`.
 
 ```typescript
-import { EventServer } from '@isdk/ai-tool';
+import { EventServer } from '@isdk/tool-event';
 
 // The signature is: `publish(event: string, data: any, target?: { clientId: string | string[] })`.
 
@@ -475,10 +468,10 @@ To enable this feature, you must set the static `autoInjectToLocalBus` property 
 
 ```typescript
 // In your server entry file
-import { EventServer } from '@isdk/ai-tool';
+import { EventServer } from '@isdk/tool-event';
 
 // Set to true to allow client events to be emitted on the server bus.
-    EventServer.autoInjectToLocalBus = true;```
+EventServer.autoInjectToLocalBus = true;```
 
 Only when this is set to `true` will the server emit `client:` prefixed events on its internal bus.
 
@@ -487,7 +480,7 @@ Only when this is set to `true` will the server emit `client:` prefixed events o
 This is the standard way to listen for events that are part of the server's own workflow. This listener will **never** be triggered by a client publishing an event with the same name.
 
 ```typescript
-import { event } from '@isdk/ai-tool/funcs/event';
+import { event } from '@isdk/tool-event';
 const eventBus = event.runSync();
 
 // Listens for an event triggered only by server-side logic.
@@ -503,7 +496,7 @@ eventBus.on('data-updated', (data) => {
 To react to an event published by a client, you must explicitly listen for the event name with the `client:` prefix. The listener will also receive a metadata object containing the trusted, server-verified `clientId`.
 
 ```typescript
-import { event } from '@isdk/ai-tool/funcs/event';
+import { event } from '@isdk/tool-event';
 const eventBus = event.runSync();
 
 // A client publishes an event like:
@@ -524,7 +517,7 @@ eventBus.on('client:user-action', (data, meta) => {
 // **Subscribe and Listen**
 await eventClient.subscribe(['user-updated', 'broadcast-message']);
 
-eventClient.on('user-updated', (data: any) => {
+eventClient.on('user-updated', (name: string, data: any) => {
   console.log('User updated on server!', data);
 });
 
@@ -557,7 +550,7 @@ For developers who need to integrate a different messaging protocol (e.g., WebSo
 
 ### Server-Side: `IPubSubServerTransport`
 
-The server-side implementation is responsible for managing client connections and broadcasting events. You implement the `IPubSubServerTransport` interface from `@isdk/ai-tool/transports/pubsub/server`.
+The server-side implementation is responsible for managing client connections and broadcasting events. You implement the `IPubSubServerTransport` interface from `@isdk/tool-event`.
 
 The core interface is defined as follows:
 
@@ -567,39 +560,52 @@ export interface IPubSubServerTransport {
   readonly protocol: string;
 
   /**
-   * Subscribes a client to an event stream by taking over an incoming request.
+   * Connects a client, establishing a persistent communication channel.
    *
    * This method is designed to be generic. Transport-specific details, such as
    * HTTP request/response objects, are passed inside the `options` parameter.
    *
-   * @param events Optional array of event names to initially subscribe the client to.
    * @param options A container for transport-specific parameters.
-   * @returns A `PubSubClient` object representing the newly connected client.
+   * @returns A `PubSubServerSession` object representing the newly connected client.
    */
-  subscribe: (
-    events?: string[],
+  connect: (
     options?: {
       req: any; // e.g., http.IncomingMessage
       res: any; // e.g., http.ServerResponse
       clientId?: string;
+      events?: string[];
       [k: string]: any;
     }
-  ) => PubSubClient; // Return a client object, minimally with a `clientId`.
+  ) => PubSubServerSession;
+
+  /**
+   * Subscribes a client session to one or more events.
+   */
+  subscribe: (session: PubSubServerSession, events: string[]) => void;
+
+  /**
+   * Unsubscribes a client session from one or more events.
+   */
+  unsubscribe: (session: PubSubServerSession, events: string[]) => void;
 
   /**
    * Publishes an event from the server to clients.
-   *
-   * The `target` parameter allows for broadcasting (default) or
-   * targeted delivery to specific client IDs.
    */
   publish: (
     event: string,
     data: any,
-    target?: { clientId?: string | string[] }
+    target?: { clientId?: string | string[] },
+    ctx?: PubSubCtx
   ) => void;
 
-  // Lifecycle hooks to let the EventServer know about connections.
+  /**
+   * Registers a callback for new client connections.
+   */
   onConnection: (cb: (session: PubSubServerSession) => void) => void;
+
+  /**
+   * Registers a callback for client disconnections.
+   */
   onDisconnect: (cb: (session: PubSubServerSession) => void) => void;
 
   /**
@@ -607,8 +613,13 @@ export interface IPubSubServerTransport {
    * to handle messages received from the client.
    */
   onMessage?: (
-    cb: (session: PubSubServerSession, event: string, data: any) => void
+    cb: (session: PubSubServerSession, event: string, data: any, ctx?: PubSubCtx) => void
   ) => void;
+
+  /**
+   * Optional. Finds and returns a session based on a request object.
+   */
+  getSessionFromReq?: (req: any) => PubSubServerSession | undefined;
 }
 ```
 
@@ -616,7 +627,7 @@ By implementing this interface, your custom transport can be plugged directly in
 
 ### Client-Side: `IPubSubClientTransport`
 
-The client-side implementation is responsible for establishing a connection to the server and receiving events. This is defined by the `IPubSubClientTransport` interface from `@isdk/ai-tool/transports/pubsub/client`.
+The client-side implementation is responsible for establishing a connection to the server and receiving events. This is defined by the `IPubSubClientTransport` interface from `@isdk/tool-event`.
 
 The core interface is defined as follows:
 
@@ -628,7 +639,7 @@ export interface IPubSubClientTransport {
    * @param params Optional parameters for the connection, such as initial event subscriptions.
    * @returns A `PubSubClientStream` instance representing the connection.
    */
-  connect: (url: string, params?: Record<string, any>) => PubSubClientStream;
+  connect: (url: string, params?: any) => PubSubClientStream | Promise<PubSubClientStream>;
 
   /**
    * Optional. Disconnects a given stream.
