@@ -1,3 +1,4 @@
+import { RPC_HEADERS } from '@isdk/tool-rpc';
 import { SSEChannel } from '../../utils/sse-channel';
 import type { IPubSubServerTransport, PubSubClientId, PubSubServerSession } from './server';
 import type { IncomingMessage, ServerResponse } from 'http';
@@ -42,7 +43,7 @@ export class SseServerPubSubTransport implements IPubSubServerTransport {
   }
 
   getSessionFromReq(req: IncomingMessage): PubSubServerSession | undefined {
-    const clientId = req.headers['x-client-id'] as string;
+    const clientId = req.headers[RPC_HEADERS.CLIENT_ID] as string;
     if (clientId) {
       const result = this.sessions.get(clientId);
       return result;
