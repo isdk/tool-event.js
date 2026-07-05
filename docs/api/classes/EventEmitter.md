@@ -6,7 +6,7 @@
 
 # Class: EventEmitter
 
-Defined in: @isdk/ai-tools/node\_modules/.pnpm/events-ex@2.1.1/node\_modules/events-ex/lib/event-emitter.d.ts:6
+Defined in: events-ex.js/lib/event-emitter.d.ts:6
 
 Class that represents an event emitter.
 
@@ -26,7 +26,7 @@ Class that represents an event emitter.
 
 > `static` **defaultMaxListeners**: `number`
 
-Defined in: @isdk/ai-tools/node\_modules/.pnpm/events-ex@2.1.1/node\_modules/events-ex/lib/event-emitter.d.ts:7
+Defined in: events-ex.js/lib/event-emitter.d.ts:7
 
 ## Methods
 
@@ -34,7 +34,7 @@ Defined in: @isdk/ai-tools/node\_modules/.pnpm/events-ex@2.1.1/node\_modules/eve
 
 > **emit**(`eventName`, ...`args`): `any`
 
-Defined in: @isdk/ai-tools/node\_modules/.pnpm/events-ex@2.1.1/node\_modules/events-ex/lib/event-emitter.d.ts:48
+Defined in: events-ex.js/lib/event-emitter.d.ts:58
 
 Emits the specified event type with the given arguments.
 
@@ -62,7 +62,7 @@ The result of the event.
 
 > **emitAsync**(`eventName`, ...`args`): `Promise`\<`any`\>
 
-Defined in: @isdk/ai-tools/node\_modules/.pnpm/events-ex@2.1.1/node\_modules/events-ex/lib/event-emitter.d.ts:54
+Defined in: events-ex.js/lib/event-emitter.d.ts:64
 
 Asynchronously emits the specified event type with the given arguments.
 
@@ -90,7 +90,7 @@ A promise that resolves with the result of the event.
 
 > **listenerCount**(`eventName`): `number`
 
-Defined in: @isdk/ai-tools/node\_modules/.pnpm/events-ex@2.1.1/node\_modules/events-ex/lib/event-emitter.d.ts:83
+Defined in: events-ex.js/lib/event-emitter.d.ts:93
 
 Returns the count of listeners that are registered to listen for the specified event.
 
@@ -98,9 +98,9 @@ Returns the count of listeners that are registered to listen for the specified e
 
 ##### eventName
 
-The name of the event to get the listeners for.
+`string` \| `RegExp`
 
-`string` | `RegExp`
+The name of the event to get the listeners for.
 
 #### Returns
 
@@ -114,7 +114,7 @@ The name of the event to get the listeners for.
 
 > **listeners**(`eventName`): `Function`[]
 
-Defined in: @isdk/ai-tools/node\_modules/.pnpm/events-ex@2.1.1/node\_modules/events-ex/lib/event-emitter.d.ts:76
+Defined in: events-ex.js/lib/event-emitter.d.ts:86
 
 Returns an array of functions that are registered to listen for the specified event.
 
@@ -122,9 +122,9 @@ Returns an array of functions that are registered to listen for the specified ev
 
 ##### eventName
 
-The name of the event to get the listeners for.
+`string` \| `RegExp`
 
-`string` | `RegExp`
+The name of the event to get the listeners for.
 
 #### Returns
 
@@ -138,7 +138,7 @@ The name of the event to get the listeners for.
 
 > **off**(`eventName`, `listener`): `EventEmitter`
 
-Defined in: @isdk/ai-tools/node\_modules/.pnpm/events-ex@2.1.1/node\_modules/events-ex/lib/event-emitter.d.ts:33
+Defined in: events-ex.js/lib/event-emitter.d.ts:43
 
 Removes a listener function from the specified event type.
 
@@ -146,7 +146,7 @@ Removes a listener function from the specified event type.
 
 ##### eventName
 
-`string` | `RegExp`
+`string` \| `RegExp`
 
 ##### listener
 
@@ -172,9 +172,9 @@ If the listener is not a function.
 
 ### on()
 
-> **on**(`eventName`, `listener`): `EventEmitter`
+> **on**(`eventName`, `listener`, `index?`): `EventEmitter`
 
-Defined in: @isdk/ai-tools/node\_modules/.pnpm/events-ex@2.1.1/node\_modules/events-ex/lib/event-emitter.d.ts:16
+Defined in: events-ex.js/lib/event-emitter.d.ts:21
 
 Adds a listener function to the specified event type.
 
@@ -182,13 +182,23 @@ Adds a listener function to the specified event type.
 
 ##### eventName
 
-`string` | `RegExp`
+`string` \| `RegExp`
 
 ##### listener
 
 `Function`
 
 The listener function to be called when the event is emitted.
+
+##### index?
+
+`number` \| `"first"` \| `"last"`
+
+The index at which to insert the listener.
+       - 'first' or -Infinity: adds to the beginning of the listeners (stay at the front).
+       - 'last' or Infinity: adds to the end of the listeners (stay at the back).
+       - number: inserts at the specified index within the normal listeners zone.
+       If not specified, the listener will be added at the end of the normal listeners.
 
 #### Returns
 
@@ -204,9 +214,9 @@ If the listener is not a function.
 
 ### once()
 
-> **once**(`eventName`, `listener`): `EventEmitter`
+> **once**(`eventName`, `listener`, `index?`): `EventEmitter`
 
-Defined in: @isdk/ai-tools/node\_modules/.pnpm/events-ex@2.1.1/node\_modules/events-ex/lib/event-emitter.d.ts:24
+Defined in: events-ex.js/lib/event-emitter.d.ts:34
 
 Adds a one-time listener function to the specified event type.
 
@@ -214,13 +224,23 @@ Adds a one-time listener function to the specified event type.
 
 ##### eventName
 
-`string` | `RegExp`
+`string` \| `RegExp`
 
 ##### listener
 
 `Function`
 
 The listener function to be called once when the event is emitted.
+
+##### index?
+
+`number` \| `"first"` \| `"last"`
+
+The index at which to insert the listener.
+       - 'first' or -Infinity: adds to the beginning of the listeners (stay at the front).
+       - 'last' or Infinity: adds to the end of the listeners (stay at the back).
+       - number: inserts at the specified index within the normal listeners zone.
+       If not specified, the listener will be added at the end of the normal listeners.
 
 #### Returns
 
@@ -238,7 +258,7 @@ If the listener is not a function.
 
 > **removeAllListeners**(`eventName?`): `EventEmitter`
 
-Defined in: @isdk/ai-tools/node\_modules/.pnpm/events-ex@2.1.1/node\_modules/events-ex/lib/event-emitter.d.ts:61
+Defined in: events-ex.js/lib/event-emitter.d.ts:71
 
 Removes all listeners for a specific event or all events from an event emitter.
 
@@ -246,9 +266,9 @@ Removes all listeners for a specific event or all events from an event emitter.
 
 ##### eventName?
 
-The event to remove listeners for. If not provided, all listeners for all events will be removed.
+`string` \| `RegExp`
 
-`string` | `RegExp`
+The event to remove listeners for. If not provided, all listeners for all events will be removed.
 
 #### Returns
 
@@ -262,7 +282,7 @@ The event to remove listeners for. If not provided, all listeners for all events
 
 > **removeListener**(`eventName`, `listener`): `EventEmitter`
 
-Defined in: @isdk/ai-tools/node\_modules/.pnpm/events-ex@2.1.1/node\_modules/events-ex/lib/event-emitter.d.ts:42
+Defined in: events-ex.js/lib/event-emitter.d.ts:52
 
 Removes a listener function from the specified event type.
 
@@ -270,7 +290,7 @@ Removes a listener function from the specified event type.
 
 ##### eventName
 
-`string` | `RegExp`
+`string` \| `RegExp`
 
 ##### listener
 
@@ -298,7 +318,7 @@ If the listener is not a function.
 
 > **setMaxListeners**(`n`): `EventEmitter`
 
-Defined in: @isdk/ai-tools/node\_modules/.pnpm/events-ex@2.1.1/node\_modules/events-ex/lib/event-emitter.d.ts:69
+Defined in: events-ex.js/lib/event-emitter.d.ts:79
 
 Sets the maximum number of listeners allowed for the event emitter.
 
@@ -326,7 +346,7 @@ If `n` is not a positive integer.
 
 > `static` **listenerCount**(`emitter`, `eventName`): `number`
 
-Defined in: @isdk/ai-tools/node\_modules/.pnpm/events-ex@2.1.1/node\_modules/events-ex/lib/event-emitter.d.ts:91
+Defined in: events-ex.js/lib/event-emitter.d.ts:101
 
 Returns the count of listeners that are registered to listen for the specified event.
 
@@ -338,7 +358,7 @@ Returns the count of listeners that are registered to listen for the specified e
 
 ##### eventName
 
-`string` | `RegExp`
+`string` \| `RegExp`
 
 #### Returns
 

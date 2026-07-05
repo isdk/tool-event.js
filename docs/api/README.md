@@ -8,7 +8,7 @@
 
 Its core design philosophy is to **seamlessly integrate a publish/subscribe model into the familiar RPC/RESTful architecture you already use**. Instead of manually managing a separate WebSocket or SSE connection, you treat real-time events as just another "tool" that is discoverable and callable through the standard `tool-rpc` framework. This approach dramatically simplifies the complexity of building interactive AI agents, live data dashboards, notification systems, and any application requiring real-time updates.
 
-In short, `@isdk/tool-event` lets you handle all remote communication—whether it's a regular RPC or a real-time event stream—in a unified and simple way.
+In short, `@isdk/tool-event` allows you to handle all events in a unified and simple way, whether they are events on remote services or local events.
 
 This package is built upon `@isdk/tool-func` and `@isdk/tool-rpc`. Please ensure you are familiar with their core concepts before proceeding.
 
@@ -17,170 +17,134 @@ This package is built upon `@isdk/tool-func` and `@isdk/tool-rpc`. Please ensure
 - **🚀 Real-Time Communication:** Provides a robust Pub/Sub model for real-time, bidirectional event flow between server and clients.
 - **🔌 Pluggable Transport Layer:** Abstracted transport layer allows using different communication protocols. Comes with a built-in implementation for **Server-Sent Events (SSE)**.
 - **🔗 Seamless Integration:** Extends `@isdk/tool-rpc`'s `ResServerTools` and `ResClientTools`, making event endpoints behave like any other RESTful/RPC tool.
-- **🔄 Automatic Forwarding:** Easily forward events from a server-side event bus to clients, or from a client-side event bus to the server.
+- **🔄 Automatic Forwarding:** Easily forward events from a server-side event bus to clients, or forward local client-side events to the server.
 - **🎯 Targeted Publishing:** Publish events from the server to all subscribed clients or target specific clients by their ID.
-- **🔐 Secure by Default:** Client-published events are sandboxed and are not automatically injected into the server's main event bus unless explicitly enabled, preventing unintended side effects.
-
-## 🏛️ Architecture
-
-`@isdk/tool-event` introduces `EventClient` and `EventServer` which work in tandem with a pluggable transport layer to facilitate real-time communication.
-
-```mermaid
-graph TD
-    subgraph Client-Side
-        A[Your Application] --> B[EventClient];
-        B -- Uses --> C[IPubSubClientTransport (e.g., SseClientPubSubTransport)];
-    end
-
-    subgraph Server-Side
-        G[EventServer] --> H[IPubSubServerTransport (e.g., SseServerPubSubTransport)];
-        H -- Manages --> I[Underlying Protocol (SSE, WebSocket, etc.)];
-        J[Server-Side EventBus] -.->|Forwarded by EventServer| H;
-    end
-
-    subgraph Network
-        C -- HTTP/SSE Connection --> I;
-    end
-
-    A -- 1. subscribe('my-event') --> B;
-    B -- 2. connect() --> C;
-    C -- 3. Establishes persistent connection --> I;
-    I -- 4. Creates session --> H;
-    H -- 5. Registers subscription --> H;
-    J -- 6. emit('my-event', data) --> G;
-    G -- 7. publish(data) --> H;
-    H -- 8. Sends data to subscribed client --> I;
-    I -- 9. Pushes event data --> C;
-    C -- 10. Triggers event --> B;
-    B -- 11. emit('my-event', data) --> A;
-```
-
-1. **EventClient/EventServer:** These are specialized `ResClientTools`/`ResServerTools` that handle the logic of subscribing, unsubscribing, and publishing events.
-2. **Transport Layer (`IPubSub...Transport`):** This is the abstraction responsible for the actual communication protocol. The library provides a default `SseServerPubSubTransport` and `SseClientPubSubTransport` for Server-Sent Events. You can create your own transport for WebSockets, IPC, or other protocols.
-3. **Event Flow:** The client uses `EventClient` to `subscribe` to topics. The transport establishes a connection. When the server's `EventServer` `publishes` an event, the transport delivers it only to subscribed clients.
-
-## 📦 Installation
-
-```bash
-npm install @isdk/tool-event @isdk/tool-rpc @isdk/tool-func
-```
+- **🔐 Secure by Default:** The server generates a unique UUID for each connected client. Client-published events are sandboxed and are not automatically injected into the server's main event bus unless explicitly enabled (`autoInjectToLocalBus`), preventing unintended side effects.
 
 ## 🚀 Quick Start
 
-This example demonstrates setting up a server that pushes the current time every 3 seconds and a client that subscribes to it.
+### 1. Installation
 
-### Step 1: Define the Event Server
-
-The `EventServer` acts as the central hub for event management. We'll use the built-in SSE transport and host it using `@isdk/tool-rpc`'s HTTP transport.
-
-```typescript
-// ./server.ts
-import { HttpServerToolTransport } from '@isdk/tool-rpc';
-import { EventServer, SseServerPubSubTransport } from '@isdk/tool-event';
-
-async function startServer() {
-  // 1. Instantiate the SSE transport for the server.
-  const sseTransport = new SseServerPubSubTransport();
-
-  // 2. Statically set the transport on the EventServer class.
-  EventServer.setPubSubTransport(sseTransport);
-
-  // 3. Instantiate and register the main event tool.
-  // The name 'event' will be part of the URL (e.g., /api/event).
-  const eventTool = new EventServer('event');
-  eventTool.register();
-
-  // 4. Forward a server-side event named 'server-time' to clients.
-  // Any client subscribed to 'server-time' will receive it.
-  eventTool.forward('server-time');
-
-  // 5. Use the standard HTTP transport from tool-rpc to host our tools.
-  const httpTransport = new HttpServerToolTransport();
-
-  // 6. Mount the EventServer base class. The transport will find the registered 'event' tool.
-  // This creates the necessary endpoints under the '/api' prefix.
-  httpTransport.mount(EventServer, '/api');
-
-  // 7. Start the server.
-  const port = 3000;
-  await httpTransport.start({ port });
-  console.log(`✅ Event server started at http://localhost:${port}`);
-
-  // 8. Publish the 'server-time' event every 3 seconds.
-  setInterval(() => {
-    const data = { now: new Date().toISOString() };
-    console.log(`\n[Server] Publishing 'server-time':`, data);
-    // Use the static publish method to send the event.
-    EventServer.publish('server-time', data);
-  }, 3000);
-}
-
-startServer();
+```bash
+npm install @isdk/tool-event
 ```
 
-### Step 2: Set up and Use the Client
+### 2. Server-Side Setup (`server.ts`)
 
-The `EventClient` connects to the server, subscribes to events, and can also publish events back to the server.
+The library exports a pre-instantiated instance of the `EventServer` class named `eventServer`. The tool name for this instance is defined by the exported constant `EventName` (whose value is `'event'`).
 
 ```typescript
-// ./client.ts
-import { HttpClientToolTransport } from '@isdk/tool-rpc';
-import { EventClient, SseClientPubSubTransport } from '@isdk/tool-event';
+import { EventServer, eventServer, SseServerPubSubTransport } from '@isdk/tool-event';
+import { ServerTools, HttpServerToolTransport } from '@isdk/tool-rpc';
+
+// 1. Set up the server-side SSE transport (SSE is a built-in protocol)
+EventServer.setPubSubTransport(new SseServerPubSubTransport());
+
+// 2. Register the pre-instantiated EventServer instance (default name is 'event')
+eventServer.register();
+
+// 3. Start the HTTP server with RPC and discovery handlers
+const server = new HttpServerToolTransport();
+server.addRpcHandler('/api');
+server.addDiscoveryHandler('/api', () => ServerTools.toJSON());
+await server.start({ port: 3000 });
+
+console.log('Event server started at: http://localhost:3000/api');
+
+// Example: Broadcast an event to all subscribed clients using the static method
+setInterval(() => {
+  EventServer.publish('server-time', { time: new Date().toISOString() });
+}, 5000);
+```
+
+### 3. Client-Side Setup (`client.ts`)
+
+Similarly, on the client side, you can directly use the exported `eventClient` instance of the `EventClient` class.
+
+```typescript
+import { EventClient, eventClient, SseClientPubSubTransport, backendEventable } from '@isdk/tool-event';
+import { ClientTools } from '@isdk/tool-rpc';
 
 async function main() {
   const apiRoot = 'http://localhost:3000/api';
 
-  // 1. Statically set the SSE transport on the EventClient class.
+  // 1. Configure the client API URL and load remote tool definitions
+  ClientTools.apiUrl = apiRoot;
+  await ClientTools.loadFrom();
+
+  // 2. Set up the client-side SSE transport (must be after apiUrl is set)
   EventClient.setPubSubTransport(new SseClientPubSubTransport());
 
-  // 2. Use the standard HTTP transport to discover the remote tools.
-  const httpTransport = new HttpClientToolTransport(apiRoot);
-  await httpTransport.mount(EventClient);
+  // 3. Make EventClient eventable (injects .on(), .off(), .emit() methods)
+  backendEventable(EventClient);
 
-  // 3. Get the dynamically created proxy for the remote 'event' tool.
-  const eventClient = EventClient.get('event');
-  if (!eventClient) {
-    throw new Error('Remote event tool not found!');
-  }
+  // 4. Register the eventClient instance
+  eventClient.register();
 
-  // 4. Listen for the 'server-time' event on the client's local event bus.
-  eventClient.on('server-time', (data) => {
-    console.log(`[Client] Received 'server-time' event:`, data);
-  });
-
-  // 5. Subscribe to the 'server-time' event from the server.
-  // This will open the SSE connection.
-  console.log("[Client] Subscribing to 'server-time'...");
+  // 5. Subscribe to and listen for the 'server-time' event
   await eventClient.subscribe('server-time');
-  console.log('✅ [Client] Subscribed successfully!');
 
-  // 6. Demonstrate publishing an event FROM the client TO the server.
-  setTimeout(() => {
-    const message = { text: 'Hello from the client!' };
-    console.log('\n[Client] Publishing "client-greeting":', message);
-    eventClient.publish({ event: 'client-greeting', data: message });
-  }, 5000);
+  eventClient.on('server-time', (name, data) => {
+    console.log('Received server time:', data.time);
+  });
+  // > ⚠️ Note: The `(name, data)` signature is due to `backendEventable` (step 3).
+  // > Without it, `on()` only receives `data` (no prepended name).
+
+  // 6. (Optional) Publish an event to the server
+  await eventClient.publish({ event: 'client-hello', data: { message: 'Hello from client!' } });
 }
 
-main();
+main().catch(console.error);
 ```
 
-### Step 3: Run the Example
+## 🏛️ Architecture
 
-1. Run the server: `ts-node ./server.ts`
-2. In a new terminal, run the client: `ts-node ./client.ts`
+The `@isdk/tool-event` system is built on a powerful and flexible architecture that separates event logic from the underlying communication protocol. Its core is a **pluggable PubSub transport layer**, allowing you to use Server-Sent Events (SSE), WebSockets, IPC, or any other protocol by simply providing a compatible transport.
 
-You will see the client receive time updates from the server every 3 seconds.
+For a complete developer's guide, please see the [**PubSub Developer's Guide (pubsub.md)**](_media/pubsub.md).
 
-## Core Concepts: The Design Philosophy
+### The Unified Event Bus
+
+The system creates a seamless, bidirectional event bus that spans the server and client. It achieves this by separating the **control plane** (for managing subscriptions) from the **data plane** (for delivering events).
+
+- **🛠️ Control Plane (RPC):** Actions like `subscribe` and `unsubscribe` are handled as standard RPC calls (mapped to `$sub` / `$unsub` actions) through the main `@isdk/tool-rpc` transport. This reuses the existing, familiar infrastructure for discovery and invocation.
+- **📡 Data Plane (PubSub):** Actual event payloads are delivered asynchronously to clients via a dedicated, abstract, and pluggable PubSub transport (e.g., SSE).
+
+```mermaid
+graph TD
+    subgraph "Client"
+        EC[EventClient<br><i>Needs backendEventable to inject .on/.off/.emit</i>]
+        CT[ClientTransport<br><i>RPC: Initiates publish/subscribe</i>]
+        PCT[PubSubClientTransport<br><i>Receives broadcast events from the server</i>]
+    end
+
+    subgraph "Server"
+        ES[EventServer<br><i>Needs backendEventable to inject .on/.off/.emit</i>]
+        ST[ServerTransport<br><i>RPC: Receives publish/subscribe</i>]
+        PST[PubSubServerTransport<br><i>Broadcasts events to clients</i>]
+    end
+
+    EC -- "RPC: publish/subscribe/unsubscribe" --> CT
+    CT -- "→ RPC Request" --> ST
+    ST -- "→ Handled by EventServer ($sub/$pub/$unsub)" --> ES
+
+    ES -- "PubSub: Broadcast Event" --> PST
+    PST -- "→ PubSub Message (e.g., SSE)" --> PCT
+    PCT -- "→ Dispatched by EventClient" --> EC
+
+    class EC,PCT,CT client
+    class ES,PST,ST server
+```
+
+### Core Concepts: The Design Philosophy
 
 To fully grasp `EventServer` and `EventClient`, it's crucial to understand their design goal: **to seamlessly integrate real-time events into the existing RPC/RESTful architecture of `@isdk/tool-rpc`**. They are more than just event handlers; they are intelligent bridges connecting local events to the remote world.
 
-### 1. Why Inherit from `ResServerTools` / `ResClientTools`?
+#### 1. Why Inherit from `ResServerTools` / `ResClientTools`?
 
 This core design decision provides several major benefits by extending a familiar framework rather than reinventing the wheel:
 
-- **Unified Discovery and Client Proxying**: Because `EventServer` is a standard `ResServerTools`, the `HttpClientToolTransport` can automatically discover it and dynamically create a full-featured `EventClient` proxy on the client-side. You don't need to write any special client configuration for event handling.
+- **Unified Discovery and Client Proxying**: Because `EventServer` is a standard `ResServerTools`, `HttpClientToolTransport` can automatically discover it and dynamically create a full-featured `EventClient` proxy on the client-side. You don't need to write any special client configuration for event handling.
 
 - **Unified API Invocation**: Actions like subscribing, unsubscribing, and publishing are cleverly mapped to standard RPC calls.
   - `eventClient.subscribe(...)` becomes an RPC call (`act: '$sub'`) to the server behind the scenes.
@@ -189,29 +153,27 @@ This core design decision provides several major benefits by extending a familia
 
 - **Transport Reuse**: The entire transport and middleware ecosystem of `@isdk/tool-rpc` is reused out-of-the-box.
 
-### 2. The Event Stream as a "Resource"
+#### 2. The Event Stream as a "Resource"
 
 The library elegantly abstracts a stateful, persistent connection (like SSE) into a stateless, REST-style "resource."
 
-- **Getting the Event Stream**: When a client needs to subscribe to an event for the first time, the `EventClient` makes a request to `GET /api/event` (which is the `list` method of the `EventServer`). The response to this request is a persistent stream of type `text/event-stream`. Conceptually, this is equivalent to "getting" a resource that represents the real-time event flow.
+- **Getting the Event Stream**: When a client needs to subscribe to an event for the first time, the `EventClient` makes a request to `GET /api/event` (which is the `list` method of the `EventServer`). The response to this request is a persistent stream of type `text/event-stream`. The server assigns a unique UUID as the `clientId` and sends it back in a `welcome` event. Conceptually, this is equivalent to "getting" a resource that represents the real-time event flow.
 
 - **Managing the Event Stream**: Subsequent actions like `subscribe` and `publish` can be seen as modifications to the state of this "resource," and they are handled through separate, conventional RPC requests.
 
 This design simplifies the complexity of real-time connection management into a clean REST/RPC model that developers are already very familiar with.
 
-### 3. The Role as a "Bridge"
+#### 3. The Role as a "Bridge"
 
 The core function of `EventServer` and `EventClient` is to act as a **bridge**:
 
 - **`EventServer`** is the bridge between the **internal server-side event bus** and **networked clients**.
-  - **Outbound**: Through the `forward()` method, it listens to internal events (e.g., a database update) and "publishes" them over the network for all subscribed clients to receive.
-  - **Inbound**: It receives events "published" from clients and, via the `autoInjectToLocalBus` option, selectively "emits" them (prefixed with `client:`) onto the internal event bus for other parts of the server to process.
+  - **Outbound**: Through the `forward()` method, it listens to internal events (e.g., a database update) and publishes them over the network for all subscribed clients to receive.
+  - **Inbound**: It receives events "published" from clients and, via the `autoInjectToLocalBus` option, selectively emits them (prefixed with `client:`) onto the internal event bus for other parts of the server to process.
 
 - **`EventClient`** is the bridge between the **network** and the **client application's local event bus**.
-  - **Inbound**: It listens for events pushed from the server over the network and "emits" them on its own instance (which is itself an `EventEmitter`). This allows your application code to consume them easily with `eventClient.on(...)`.
-  - **Outbound**: Through the `publish()` or `forwardEvent()` methods, it "publishes" local client-side events over the network to the server.
-
-In summary, this design allows developers to ignore the complex details of network protocols and connection management most of the time. You simply listen for or emit events on the appropriate event bus, and `@isdk/tool-event` handles all the tedious work in between.
+  - **Inbound**: It listens for events pushed from the server over the network and emits them on its own instance (after `backendEventable` injection). This allows your application code to consume them easily with `eventClient.on(...)`.
+  - **Outbound**: Through the `publish()` or `forwardEvent()` methods, it publishes local client-side events over the network to the server.
 
 ## 🚀 Advanced Usage
 
@@ -232,7 +194,7 @@ EventServer.autoInjectToLocalBus = true;
 
 // Listen for the 'client-greeting' event from any client
 eventBus.on('client:client-greeting', function(data, ctx) {
-  // 'this' is the event object, 'ctx' contains metadata
+  // 'this' is the event object, 'ctx' contains metadata with the sender session
   const senderId = ctx.sender?.clientId;
   console.log(`[Server] Received greeting from client ${senderId}:`, data);
 
@@ -245,6 +207,8 @@ eventBus.on('client:client-greeting', function(data, ctx) {
 
 When the client from the Quick Start sends its `client-greeting` event, the server will now log it and send a private reply back to that specific client.
 
+**Important**: The `sender` object in `ctx` contains the trusted `clientId` extracted from the transport session (not from the client payload), which is a critical security measure preventing impersonation.
+
 ### 2. Publishing to a Specific Client (Targeted Publishing)
 
 Instead of broadcasting to all subscribers, you can send an event to a specific user by providing their `clientId` in the `publish` method.
@@ -255,10 +219,10 @@ Instead of broadcasting to all subscribers, you can send an event to a specific 
 // ... in your main function ...
 
 // Subscribe to a private event
-eventClient.subscribe('private-reply');
+await eventClient.subscribe('private-reply');
 
 // Listen for it
-eventClient.on('private-reply', (data) => {
+eventClient.on('private-reply', (name, data) => {
   console.log(`[Client] Received a private reply:`, data);
 });
 ```
@@ -293,13 +257,9 @@ The `forwardEvent` method is a powerful way to seamlessly sync local client-side
 ```typescript
 // client.ts
 
-// ... assuming eventClient is initialized and is eventable ...
+// ... assuming eventClient is initialized and backendEventable has been applied ...
 
-// Let's say 'ui-event-bus' is a local EventEmitter used in your app.
-// For demonstration, we'll have the eventClient play this role.
-const localEventBus = eventClient;
-
-// 1. Configure forwarding: any 'user-action' emitted on localEventBus will be sent to the server.
+// 1. Configure forwarding: any 'user-action' emitted locally will be sent to the server.
 eventClient.forwardEvent('user-action');
 
 console.log('[Client] Set up forwarding for "user-action" events.');
@@ -308,15 +268,62 @@ console.log('[Client] Set up forwarding for "user-action" events.');
 setTimeout(() => {
   const actionData = { action: 'button-click', elementId: 'save-button' };
   console.log('[Client] Emitting "user-action" on local bus:', actionData);
-  localEventBus.emit('user-action', actionData);
+  eventClient.emit('user-action', actionData);
 }, 2000);
 
 // On the server, you can now handle 'client:user-action' just like any other client-published event.
+
+// To stop forwarding, use unforwardEvent:
+// eventClient.unforwardEvent('user-action');
 ```
 
 This pattern is excellent for syncing client behaviors (like analytics, logging, or state changes) to a backend without needing to write manual `publish` calls at every event site.
 
-### 5. Implementing and Using Pluggable Transports
+### 5. Server-Side Event Forwarding from the Event Bus
+
+On the server, you can use the `forward()` method to automatically relay events from the global event bus to all subscribed clients.
+
+```typescript
+import { EventServer, eventServer, event } from '@isdk/tool-event';
+
+const eventBus = event.runSync();
+
+// 1. Configure the server to forward specific events.
+eventServer.forward(['user-updated', 'item-added']);
+
+// 2. Now, any other part of your server can simply emit events on the bus,
+//    and they will be automatically broadcast to subscribed clients.
+function updateUser(user: any) {
+  // This will be forwarded to all subscribed clients
+  eventBus.emit('user-updated', { userId: user.id, status: 'active' });
+}
+
+// To stop forwarding:
+// eventServer.unforward(['user-updated']);
+```
+
+### 6. Client Connection Lifecycle Management
+
+The `EventClient` provides methods to manage the SSE/pubsub connection lifecycle.
+
+```typescript
+// Initialize (reconnect) with specific event subscriptions
+await eventClient.init(['news', 'updates']);
+
+// Check if the connection is active
+if (eventClient.active) {
+  console.log('Connection is active');
+}
+
+// Activate/Deactivate the connection
+await eventClient.setActive(true);  // Connect
+await eventClient.setActive(false); // Disconnect
+
+// Close the connection
+eventClient.close();
+```
+
+### 7. Implementing and Using Pluggable Transports
 
 One of the library's core strengths is its pluggable transport layer. While it ships with an SSE implementation, you can easily create and swap in your own (e.g., based on WebSockets or IPC).
 
@@ -333,6 +340,8 @@ export class WebSocketServerTransport implements IPubSubServerTransport {
   private wss: WebSocketServer;
   private sessions = new Map<string, PubSubServerSession>();
   private onMsg: (session: PubSubServerSession, event: string, data: any) => void;
+  private onConn?: (session: PubSubServerSession) => void;
+  private onDis?: (session: PubSubServerSession) => void;
 
   constructor(options: { port: number }) {
     this.wss = new WebSocketServer({ port: options.port });
@@ -350,25 +359,41 @@ export class WebSocketServerTransport implements IPubSubServerTransport {
         raw: ws,
       };
       this.sessions.set(clientId, session);
+      this.onConn?.(session);
 
       ws.on('message', (message) => {
         const { event, data } = JSON.parse(message.toString());
-        // Invoke the callback registered by EventServer to handle inbound messages
         this.onMsg?.(session, event, data);
       });
 
       ws.on('close', () => {
         this.sessions.delete(clientId);
+        this.onDis?.(session);
       });
     });
   }
 
-  // EventServer will call this to register its message handler
-  onMessage(cb) {
-    this.onMsg = cb;
+  connect(options?: { req?: any; res?: any; clientId?: string; events?: string[] }) {
+    // WebSocket connections are handled in the constructor; this method is for
+    // protocols like SSE that need to create a connection from an HTTP request.
+    throw new Error('WebSocket transport uses its own connection lifecycle.');
   }
 
-  publish(event: string, data: any, target?: { clientId: string | string[] }) {
+  getSessionFromReq(req: any): PubSubServerSession | undefined {
+    // Extract clientId from request headers
+    return this.sessions.get(req.headers['x-client-id']);
+  }
+
+  subscribe(session: PubSubServerSession, events: string[]) {
+    // Track subscriptions for this session
+    // Implementation depends on transport specifics
+  }
+
+  unsubscribe(session: PubSubServerSession, events: string[]) {
+    // Remove subscriptions for this session
+  }
+
+  publish(event: string, data: any, target?: { clientId?: string | string[] }) {
     const payload = JSON.stringify({ event, data });
     if (target?.clientId) {
       const ids = Array.isArray(target.clientId) ? target.clientId : [target.clientId];
@@ -378,13 +403,17 @@ export class WebSocketServerTransport implements IPubSubServerTransport {
     }
   }
 
-  // Note: For WebSockets, connect/subscribe/unsubscribe are often handled
-  // within the connection and message events, so these might be no-ops or for logging.
-  connect(options) { /* ... */ }
-  subscribe(session, events) { /* ... */ }
-  unsubscribe(session, events) { /* ... */ }
-  onConnection(cb) { /* ... */ }
-  onDisconnect(cb) { /* ... */ }
+  onMessage(cb: (session: PubSubServerSession, event: string, data: any) => void) {
+    this.onMsg = cb;
+  }
+
+  onConnection(cb: (session: PubSubServerSession) => void) {
+    this.onConn = cb;
+  }
+
+  onDisconnect(cb: (session: PubSubServerSession) => void) {
+    this.onDis = cb;
+  }
 }
 ```
 
@@ -397,8 +426,6 @@ You would simply replace the transport on your `EventServer` during startup.
 // import { SseServerPubSubTransport } from '@isdk/tool-event'; // Old
 import { WebSocketServerTransport } from './transports/WebSocketServerTransport'; // New
 
-// ...
-
 // const sseTransport = new SseServerPubSubTransport(); // Old
 const wsTransport = new WebSocketServerTransport({ port: 8080 }); // New
 
@@ -409,6 +436,84 @@ EventServer.setPubSubTransport(wsTransport); // New
 ```
 
 This way, your core business logic in `EventServer` remains completely decoupled from the underlying communication protocol.
+
+### 8. Simplifying Backend Event Handling with `backendEventable`
+
+For a more integrated, object-oriented approach to events, `@isdk/tool-event` provides a powerful `backendEventable` function. It uses the `custom-ability` library's AOP (Aspect-Oriented Programming) pattern to inject event capabilities (`on`, `emit`, `once`, `off`, etc.) directly into a class's prototype via `createAbilityInjector`.
+
+This is particularly useful for:
+
+- Making `EventServer` itself capable of emitting its own lifecycle events.
+- Allowing any backend service (that extends `ToolFunc`) to easily publish or subscribe to events without needing a direct reference to the event bus.
+- **Enhancing `EventClient` to act as a powerful local event bus that is also connected to the server and other clients.**
+
+**How to use `backendEventable`:**
+
+In your application's main setup file, you can enhance the classes you want to make event-aware. This is typically done once when your application starts.
+
+```typescript
+// --- In your application's main setup file ---
+import { EventServer, EventClient, backendEventable, EventBusName, event } from '@isdk/tool-event';
+import { ToolFunc } from '@isdk/tool-func';
+import { ClientTools } from '@isdk/tool-rpc';
+
+// 1. Enhance the EventServer class itself to be event-aware.
+// This "patches" the class, so any instance of EventServer can now use `this.emit()`.
+backendEventable(EventServer);
+
+// 2. Enhance the EventClient class to be event-aware (uses default event bus name).
+// For testing with both EventServer and EventClient in the same process,
+// you can specify a custom event bus name:
+// const EventBusClientName = 'event-bus-client';
+// backendEventable(EventClient, { eventBusName: EventBusClientName });
+backendEventable(EventClient);
+
+// (Optional) Enhance a custom service class
+class MyCustomService extends ToolFunc {
+  name = 'my-service';
+  doSomething() {
+    console.log('[MyService] Doing something and emitting an event.');
+    this.emit('my-service-event', { info: 'Something important happened' });
+  }
+}
+backendEventable(MyCustomService);
+
+// --- Later, during server initialization (server.ts) ---
+
+async function startServer() {
+  // Set up the shared event bus (one-time setup).
+  const eventBus = event.runSync();
+  new ToolFunc(EventBusName, { tools: { emitter: eventBus } }).register();
+
+  // Instantiate your enhanced classes (using a different name to avoid
+  // conflicting with the pre-exported `eventServer` singleton).
+  const eventTool = new EventServer('my-event');
+  eventTool.register();
+
+  const myService = new MyCustomService();
+  myService.register();
+
+  // Now, instances can communicate via the event bus.
+  eventTool.on('my-service-event', (name, data) => {
+    console.log('EventServer instance caught event from MyCustomService:', data);
+  });
+
+  // Trigger the method that emits the event.
+  myService.doSomething();
+
+  // You can also still use the static publish method, which uses the same bus.
+  EventServer.publish('another-event', { from: 'static call' });
+}
+```
+
+The `emit()` method automatically passes the tool's `name` as the first argument to listeners, making it easy to identify the source of events. For example:
+
+```typescript
+eventTool.on('my-service-event', function(name, data) {
+  // name will be 'my-service' (the source tool's name)
+  // data will be { info: 'Something important happened' }
+});
+```
 
 ## 🤝 Contributing
 

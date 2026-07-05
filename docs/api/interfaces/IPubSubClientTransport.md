@@ -6,7 +6,7 @@
 
 # Interface: IPubSubClientTransport
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/transports/pubsub/client.ts:81](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/transports/pubsub/client.ts#L81)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/transports/pubsub/client.ts:81](https://github.com/isdk/tool-event.js/blob/1ef8e2920d1f7a865c06f671102c2c2b3d432d07/src/transports/pubsub/client.ts#L81)
 
 Defines the interface for a client-side PubSub transport.
 
@@ -15,11 +15,11 @@ stream (`PubSubClientStream`) to the server.
 
 ## Properties
 
-### connect()
+### connect
 
 > **connect**: (`url`, `params?`) => [`PubSubClientStream`](PubSubClientStream.md) \| `Promise`\<[`PubSubClientStream`](PubSubClientStream.md)\>
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/transports/pubsub/client.ts:89](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/transports/pubsub/client.ts#L89)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/transports/pubsub/client.ts:89](https://github.com/isdk/tool-event.js/blob/1ef8e2920d1f7a865c06f671102c2c2b3d432d07/src/transports/pubsub/client.ts#L89)
 
 Establishes a connection to a server endpoint.
 
@@ -46,11 +46,11 @@ A `PubSubClientStream` instance that represents the active connection.
 
 ***
 
-### disconnect()?
+### disconnect?
 
-> `optional` **disconnect**: (`stream`) => `void`
+> `optional` **disconnect?**: (`stream`) => `void`
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/transports/pubsub/client.ts:98](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/transports/pubsub/client.ts#L98)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/transports/pubsub/client.ts:98](https://github.com/isdk/tool-event.js/blob/1ef8e2920d1f7a865c06f671102c2c2b3d432d07/src/transports/pubsub/client.ts#L98)
 
 Optional. Disconnects a given stream.
 While the `close` method exists on the stream itself, placing `disconnect`
@@ -71,11 +71,11 @@ The stream to disconnect.
 
 ***
 
-### setApiRoot()?
+### setApiRoot?
 
-> `optional` **setApiRoot**: (`apiRoot`) => `void`
+> `optional` **setApiRoot?**: (`apiRoot`) => `void`
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/transports/pubsub/client.ts:106](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/transports/pubsub/client.ts#L106)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/transports/pubsub/client.ts:106](https://github.com/isdk/tool-event.js/blob/1ef8e2920d1f7a865c06f671102c2c2b3d432d07/src/transports/pubsub/client.ts#L106)
 
 Optional. Configures the transport with a base URL.
 If implemented, this allows the transport to resolve relative paths

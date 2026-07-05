@@ -6,9 +6,9 @@
 
 # Function: wrapEventEmitter()
 
-> **wrapEventEmitter**(`o?`): `any`
+> **wrapEventEmitter**(`o?`, `options?`): `any`
 
-Defined in: @isdk/ai-tools/node\_modules/.pnpm/events-ex@2.1.1/node\_modules/events-ex/lib/wrap-event-emitter.d.ts:6
+Defined in: events-ex.js/lib/wrap-event-emitter.d.ts:7
 
 Create or inject the eventable instance into the object
 
@@ -16,9 +16,15 @@ Create or inject the eventable instance into the object
 
 ### o?
 
-`any`
+`Object`
 
 the optional instance to eventable
+
+### options?
+
+`Object`
+
+optional configuration for the emitter
 
 ## Returns
 

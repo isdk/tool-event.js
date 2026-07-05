@@ -8,7 +8,7 @@
 
 > **PubSubCtx**\<`T`\> = `object`
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/transports/pubsub/base.ts:1](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/transports/pubsub/base.ts#L1)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/transports/pubsub/base.ts:1](https://github.com/isdk/tool-event.js/blob/1ef8e2920d1f7a865c06f671102c2c2b3d432d07/src/transports/pubsub/base.ts#L1)
 
 ## Type Parameters
 
@@ -22,36 +22,36 @@ Defined in: [@isdk/ai-tools/packages/tool-event/src/transports/pubsub/base.ts:1]
 
 > **event**: `string`
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/transports/pubsub/base.ts:2](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/transports/pubsub/base.ts#L2)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/transports/pubsub/base.ts:2](https://github.com/isdk/tool-event.js/blob/1ef8e2920d1f7a865c06f671102c2c2b3d432d07/src/transports/pubsub/base.ts#L2)
 
 ***
 
 ### from?
 
-> `optional` **from**: `string`
+> `optional` **from?**: `string`
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/transports/pubsub/base.ts:5](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/transports/pubsub/base.ts#L5)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/transports/pubsub/base.ts:5](https://github.com/isdk/tool-event.js/blob/1ef8e2920d1f7a865c06f671102c2c2b3d432d07/src/transports/pubsub/base.ts#L5)
 
 ***
 
 ### id?
 
-> `optional` **id**: `string`
+> `optional` **id?**: `string`
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/transports/pubsub/base.ts:3](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/transports/pubsub/base.ts#L3)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/transports/pubsub/base.ts:3](https://github.com/isdk/tool-event.js/blob/1ef8e2920d1f7a865c06f671102c2c2b3d432d07/src/transports/pubsub/base.ts#L3)
 
 ***
 
 ### meta?
 
-> `optional` **meta**: `any`
+> `optional` **meta?**: `any`
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/transports/pubsub/base.ts:6](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/transports/pubsub/base.ts#L6)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/transports/pubsub/base.ts:6](https://github.com/isdk/tool-event.js/blob/1ef8e2920d1f7a865c06f671102c2c2b3d432d07/src/transports/pubsub/base.ts#L6)
 
 ***
 
 ### ts?
 
-> `optional` **ts**: `number`
+> `optional` **ts?**: `number`
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/transports/pubsub/base.ts:4](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/transports/pubsub/base.ts#L4)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/transports/pubsub/base.ts:4](https://github.com/isdk/tool-event.js/blob/1ef8e2920d1f7a865c06f671102c2c2b3d432d07/src/transports/pubsub/base.ts#L4)

@@ -6,7 +6,7 @@
 
 # Class: SseServerPubSubTransport
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/transports/pubsub/sse-server.ts:5](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/transports/pubsub/sse-server.ts#L5)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/transports/pubsub/sse-server.ts:6](https://github.com/isdk/tool-event.js/blob/1ef8e2920d1f7a865c06f671102c2c2b3d432d07/src/transports/pubsub/sse-server.ts#L6)
 
 Defines the interface for a server-side PubSub transport layer.
 
@@ -35,7 +35,7 @@ connections, subscriptions, and message passing.
 
 > `readonly` **name**: `"sse"` = `'sse'`
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/transports/pubsub/sse-server.ts:6](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/transports/pubsub/sse-server.ts#L6)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/transports/pubsub/sse-server.ts:7](https://github.com/isdk/tool-event.js/blob/1ef8e2920d1f7a865c06f671102c2c2b3d432d07/src/transports/pubsub/sse-server.ts#L7)
 
 A unique, human-readable name for the transport (e.g., 'sse', 'websocket').
 
@@ -49,7 +49,7 @@ A unique, human-readable name for the transport (e.g., 'sse', 'websocket').
 
 > `readonly` **protocol**: `"sse"`
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/transports/pubsub/sse-server.ts:7](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/transports/pubsub/sse-server.ts#L7)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/transports/pubsub/sse-server.ts:8](https://github.com/isdk/tool-event.js/blob/1ef8e2920d1f7a865c06f671102c2c2b3d432d07/src/transports/pubsub/sse-server.ts#L8)
 
 The protocol identifier.
 
@@ -63,7 +63,7 @@ The protocol identifier.
 
 > **connect**(`options?`): [`PubSubServerSession`](../interfaces/PubSubServerSession.md)
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/transports/pubsub/sse-server.ts:14](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/transports/pubsub/sse-server.ts#L14)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/transports/pubsub/sse-server.ts:15](https://github.com/isdk/tool-event.js/blob/1ef8e2920d1f7a865c06f671102c2c2b3d432d07/src/transports/pubsub/sse-server.ts#L15)
 
 Connects a client, establishing a persistent communication channel.
 
@@ -107,9 +107,9 @@ A `PubSubServerSession` object representing the newly connected client session.
 
 ### getSessionFromReq()
 
-> **getSessionFromReq**(`req`): `undefined` \| [`PubSubServerSession`](../interfaces/PubSubServerSession.md)
+> **getSessionFromReq**(`req`): [`PubSubServerSession`](../interfaces/PubSubServerSession.md) \| `undefined`
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/transports/pubsub/sse-server.ts:44](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/transports/pubsub/sse-server.ts#L44)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/transports/pubsub/sse-server.ts:45](https://github.com/isdk/tool-event.js/blob/1ef8e2920d1f7a865c06f671102c2c2b3d432d07/src/transports/pubsub/sse-server.ts#L45)
 
 Optional. Finds and returns a session based on a request object.
 This is used by higher-level tools to find the correct session
@@ -125,7 +125,7 @@ The request object (e.g., http.IncomingMessage or Electron.IpcMainEvent).
 
 #### Returns
 
-`undefined` \| [`PubSubServerSession`](../interfaces/PubSubServerSession.md)
+[`PubSubServerSession`](../interfaces/PubSubServerSession.md) \| `undefined`
 
 The corresponding session, or undefined if not found.
 
@@ -139,7 +139,7 @@ The corresponding session, or undefined if not found.
 
 > **onConnection**(`cb`): `void`
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/transports/pubsub/sse-server.ts:69](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/transports/pubsub/sse-server.ts#L69)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/transports/pubsub/sse-server.ts:70](https://github.com/isdk/tool-event.js/blob/1ef8e2920d1f7a865c06f671102c2c2b3d432d07/src/transports/pubsub/sse-server.ts#L70)
 
 Registers a callback to be invoked when a new client connection is established
 and a session is created.
@@ -166,7 +166,7 @@ The callback function that receives the new `PubSubServerSession`.
 
 > **onDisconnect**(`cb`): `void`
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/transports/pubsub/sse-server.ts:70](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/transports/pubsub/sse-server.ts#L70)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/transports/pubsub/sse-server.ts:71](https://github.com/isdk/tool-event.js/blob/1ef8e2920d1f7a865c06f671102c2c2b3d432d07/src/transports/pubsub/sse-server.ts#L71)
 
 Registers a callback to be invoked when a client disconnects.
 
@@ -193,7 +193,7 @@ The callback function that receives the `PubSubServerSession` of the
 
 > **publish**(`event`, `data`, `target?`): `void`
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/transports/pubsub/sse-server.ts:65](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/transports/pubsub/sse-server.ts#L65)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/transports/pubsub/sse-server.ts:66](https://github.com/isdk/tool-event.js/blob/1ef8e2920d1f7a865c06f671102c2c2b3d432d07/src/transports/pubsub/sse-server.ts#L66)
 
 Publishes an event from the server to connected clients.
 
@@ -240,7 +240,7 @@ A single `PubSubClientId` or an array of IDs to
 
 > **subscribe**(`session`, `events`): `void`
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/transports/pubsub/sse-server.ts:53](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/transports/pubsub/sse-server.ts#L53)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/transports/pubsub/sse-server.ts:54](https://github.com/isdk/tool-event.js/blob/1ef8e2920d1f7a865c06f671102c2c2b3d432d07/src/transports/pubsub/sse-server.ts#L54)
 
 Subscribes a client session to one or more events.
 
@@ -276,7 +276,7 @@ An array of event names to subscribe to.
 
 > **unsubscribe**(`session`, `events`): `void`
 
-Defined in: [@isdk/ai-tools/packages/tool-event/src/transports/pubsub/sse-server.ts:59](https://github.com/isdk/tool-event.js/blob/c19901f0aa18ed5118b1cde16440f4dc8f21db7f/src/transports/pubsub/sse-server.ts#L59)
+Defined in: [@isdk/ai-tools/packages/tool-event/src/transports/pubsub/sse-server.ts:60](https://github.com/isdk/tool-event.js/blob/1ef8e2920d1f7a865c06f671102c2c2b3d432d07/src/transports/pubsub/sse-server.ts#L60)
 
 Unsubscribes a client session from one or more events.
 

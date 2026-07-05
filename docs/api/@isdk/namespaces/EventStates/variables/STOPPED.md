@@ -8,4 +8,4 @@
 
 > `const` **STOPPED**: `2`
 
-Defined in: @isdk/ai-tools/node\_modules/.pnpm/events-ex@2.1.1/node\_modules/events-ex/lib/consts.d.ts:10
+Defined in: events-ex.js/lib/consts.d.ts:16

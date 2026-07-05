@@ -6,9 +6,9 @@
 
 # Function: eventable()
 
-> **eventable**\<`T`\>(`targetClass?`, `options?`): `T` & (`aClass?`) => `Function` & `T` *extends* (...`args`) => `any` ? `InstanceType`\<`T`\<`T`\>\> : `T`
+> **eventable**\<`T`\>(`targetClass?`, `options?`): `T` & (`aClass?`) => `Function` & `T` *extends* (...`args`) => `any` ? `InstanceType`\<`T`\> : `T`
 
-Defined in: @isdk/ai-tools/node\_modules/.pnpm/events-ex@2.1.1/node\_modules/events-ex/lib/eventable.d.ts:48
+Defined in: events-ex.js/lib/eventable.d.ts:48
 
 Adds event-emitting capabilities to a class by injecting necessary methods and properties.
 
@@ -23,7 +23,7 @@ by including methods like `listenerCount`, `setMaxListeners`, `addListener`, `re
 
 ### T
 
-`T` *extends* `Function` \| (...`args`) => `any`
+`T` *extends* `Function` \| ((...`args`) => `any`)
 
 ## Parameters
 
