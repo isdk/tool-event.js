@@ -8,6 +8,32 @@ In short, `@isdk/tool-event` allows you to handle all events in a unified and si
 
 This package is built upon `@isdk/tool-func` and `@isdk/tool-rpc`. Please ensure you are familiar with their core concepts before proceeding.
 
+## 🧪 Testing
+
+The project includes both unit tests and browser-based E2E tests.
+
+```bash
+# Unit tests (vitest, 22 tests)
+pnpm test
+
+# Browser E2E tests (Playwright, Chromium, 44 tests)
+pnpm test:e2e
+
+# Run all tests
+pnpm test:all
+```
+
+The E2E tests cover:
+- Basic SSE event communication (publish, subscribe, unsubscribe)
+- Bidirectional echo and concurrent events
+- Multi-data type support (object, array, string)
+- Stream lifecycle (close, cleanup)
+- Reconnection with `Last-Event-ID` replay (missed events recovery)
+- `@isdk/tool-event/transports/pubsub/browser` subpath imports in browser
+- `EventServer` bidirectional communication via HTTP bridge transport
+
+These tests run automatically in CI on every push/PR to `main` that touches the `packages/tool-event` directory.
+
 ## ✨ Core Features
 
 - **🚀 Real-Time Communication:** Provides a robust Pub/Sub model for real-time, bidirectional event flow between server and clients.

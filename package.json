@@ -7,16 +7,34 @@
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.ts",
+  "browser": {
+    "./dist/index.js": "./dist/browser.js",
+    "./dist/index.mjs": "./dist/browser.mjs",
+    "./dist/transports/pubsub.js": "./dist/transports/pubsub/browser.js",
+    "./dist/transports/pubsub.mjs": "./dist/transports/pubsub/browser.mjs"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
+      "browser": "./dist/browser.mjs",
       "require": "./dist/index.js",
       "import": "./dist/index.mjs"
     },
+    "./browser": {
+      "types": "./dist/browser.d.ts",
+      "import": "./dist/browser.mjs",
+      "require": "./dist/browser.js"
+    },
     "./transports/pubsub": {
       "types": "./dist/transports/pubsub.d.ts",
+      "browser": "./dist/transports/pubsub/browser.mjs",
       "require": "./dist/transports/pubsub.js",
       "import": "./dist/transports/pubsub.mjs"
+    },
+    "./transports/pubsub/browser": {
+      "types": "./dist/transports/pubsub/browser.d.ts",
+      "import": "./dist/transports/pubsub/browser.mjs",
+      "require": "./dist/transports/pubsub/browser.js"
     }
   },
   "files": [
@@ -34,15 +52,16 @@
     "@isdk/hash": "workspace:^",
     "@isdk/tool-func": "workspace:^",
     "@isdk/tool-rpc": "workspace:^",
+    "custom-ability": "^2.0.1",
     "events-ex": "^2.1.1",
     "eventsource-parser": "^3.0.6",
     "lodash-es": "^4.17.21",
     "nanoid": "^5.1.5",
-    "uuid": "^11.1.0",
-    "custom-ability": "^2.0.1"
+    "uuid": "^11.1.0"
   },
   "devDependencies": {
     "@antfu/eslint-config": "^4.10.1",
+    "@playwright/test": "^1.61.1",
     "@types/jest": "^29.5.14",
     "@types/lodash-es": "^4.17.12",
     "@types/node": "^24.3.0",
@@ -102,6 +121,8 @@
     "lint": "eslint .",
     "lint:fix": "pnpm run lint --fix",
     "test": "FORCE_COLOR=1 vitest run",
+    "test:all": "pnpm test && pnpm test:e2e",
+    "test:e2e": "node test/e2e/run-e2e.mjs",
     "release": "pnpm run clean && pnpm run build && git add -f docs/api && git ci -m 'docs: update API docs' && pnpm dlx commit-and-tag-version -s",
     "release.alpha": "npm run release -- --prerelease alpha"
   }

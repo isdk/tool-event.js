@@ -5,7 +5,9 @@ Please feel free to file GitHub Issues or propose Pull Requests. We're always ha
 ## Testing
 
 ```shell
-pnpm test
+pnpm test         # Unit tests (vitest)
+pnpm test:e2e     # Browser E2E tests (Playwright, 44 tests)
+pnpm test:all     # All tests (unit + E2E)
 ```
 
 ## Releasing

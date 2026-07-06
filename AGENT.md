@@ -7,7 +7,7 @@ A real-time, bidirectional Pub/Sub event system that plugs into the `@isdk/tool-
 | Field | Value |
 |-------|-------|
 | **npm** | `@isdk/tool-event` |
-| **Exports** | `@isdk/tool-event` (main), `@isdk/tool-event/transports/pubsub` |
+| **Exports** | `@isdk/tool-event` (main), `@isdk/tool-event/browser`, `@isdk/tool-event/transports/pubsub`, `@isdk/tool-event/transports/pubsub/browser` |
 | **Depends on** | `@isdk/tool-rpc`, `@isdk/tool-func`, `events-ex`, `custom-ability` |
 | **Key constants** | `EventName = 'event'`, `EventBusName = 'event-bus'`, `ClientEventPrefix = 'client:'` |
 
@@ -49,7 +49,7 @@ Without `backendEventable`, `on()` receives only `data`.
 ## Exports
 
 ```typescript
-// Main:
+// Main (Node.js + SSR):
 import {
   EventServer, eventServer,          // server-side class & singleton
   EventClient, eventClient,          // client-side class & singleton
@@ -64,6 +64,16 @@ import {
   SseClientPubSubTransport,
 } from '@isdk/tool-event';
 
+// Browser-only (excludes Node.js deps like 'http'):
+import {
+  EventClient, eventClient,
+  backendEventable,
+  EventName, EventBusName, ClientEventPrefix,
+  EventEmitter, eventable, EventStates, wrapEventEmitter,
+  // Only SseClientPubSubTransport (no SseServerPubSubTransport):
+  SseClientPubSubTransport,
+} from '@isdk/tool-event/browser';
+
 // Types (for custom transports):
 import type {
   IPubSubServerTransport, PubSubServerSession,
@@ -71,9 +81,14 @@ import type {
   PubSubCtx,
 } from '@isdk/tool-event';
 
-// Subpath:
+// Subpath — transport implementations:
 import { SseServerPubSubTransport, SseClientPubSubTransport } from '@isdk/tool-event/transports/pubsub';
+
+// Browser-only transport subpath (safe for bundlers like Vite):
+import { SseClientPubSubTransport } from '@isdk/tool-event/transports/pubsub/browser';
 ```
+
+> 💡 The `transports/pubsub/browser` subpath only exports client-side transports, making it safe for browser bundlers that cannot resolve Node.js built-in modules like `http`.
 
 ## Quick Setup (SSE)
 

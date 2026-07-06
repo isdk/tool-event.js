@@ -8,6 +8,32 @@
 
 本项目基于 `@isdk/tool-func` 和 `@isdk/tool-rpc` 构建。在继续之前，请确保您已熟悉它们的核心概念。
 
+## 🧪 测试
+
+项目包含单元测试和基于浏览器的 E2E 测试。
+
+```bash
+# 单元测试 (vitest, 22 个)
+pnpm test
+
+# 浏览器 E2E 测试 (Playwright, Chromium, 44 个)
+pnpm test:e2e
+
+# 运行全部测试
+pnpm test:all
+```
+
+E2E 测试覆盖范围：
+- 基本的 SSE 事件通信（发布、订阅、取消订阅）
+- 双向回显和并发事件
+- 多数据类型支持（对象、数组、字符串）
+- 流生命周期（关闭、清理）
+- 重连与 `Last-Event-ID` 重放（断连期间丢失事件的恢复）
+- `@isdk/tool-event/transports/pubsub/browser` 子路径在浏览器中的导入
+- `EventServer` 通过 HTTP 桥接传输实现双向通信
+
+这些测试在每次推送/PR 到 `main` 分支且涉及 `packages/tool-event` 目录变更时自动在 CI 中运行。
+
 ## ✨ 核心功能
 
 - **🚀 实时通信:** 提供了一个健壮的 Pub/Sub 模型，用于服务器和客户端之间的实时、双向事件流。

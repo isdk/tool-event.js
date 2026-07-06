@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>@isdk/tool-event Browser E2E Test</title>
+<style>
+  body { font-family: monospace; background: #1a1a2e; color: #e0e0e0; padding: 2em; max-width: 800px; margin: 0 auto; }
+  h1 { color: #e94560; }
+  .pass { color: #4ecca3; }
+  .fail { color: #e94560; }
+  .info { color: #888; }
+  #results { margin-top: 1em; }
+  .test { padding: 0.5em; border-bottom: 1px solid #333; }
+  .test.pass { background: rgba(78, 204, 163, 0.1); }
+  .test.fail { background: rgba(233, 69, 96, 0.1); }
+  #summary { margin-top: 1em; padding: 1em; background: #16213e; border-radius: 8px; }
+  .status { margin-bottom: 1em; padding: 0.5em; background: #16213e; border-radius: 4px; }
+</style>
+</head>
+<body>
+<h1>🧪 @isdk/tool-event Browser E2E</h1>
+<div class="status" id="status">🔄 Initializing...</div>
+<div id="summary">
+  <span id="passCount">0</span> passed / <span id="failCount">0</span> failed / <span id="totalCount">0</span> total
+</div>
+<div id="results"></div>
+<script type="module" src="./main.ts"></script>
+</body>
+</html>
