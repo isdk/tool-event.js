@@ -16,13 +16,32 @@ Prettier covers JSON and YAML only (`pnpm run format` checks, `pnpm run format:f
 
 Two TypeScript configs, one job each: [`tsconfig.json`](./tsconfig.json) is for editors and `pnpm run typecheck` — it keeps `test/**` in the program and loads `vitest/globals`, and never emits. [`tsconfig.release.json`](./tsconfig.release.json) is for publishing: `tsup --dts` and typedoc use it, and it excludes test files. Add new compiler options to `tsconfig.json` so both inherit them.
 
+## Documentation
+
+Docs ship in language pairs: `NAME.md` (English, the canonical copy) and `NAME.cn.md` (简体中文). `README`, `AGENT` and `pubsub` all follow it; a doc with no `.cn.md` sibling is a gap, not a convention.
+
+Every pair carries a language-switch line on line 3, right under the title:
+
+```markdown
+> 【English|[中文](./NAME.cn.md)】   <!-- in NAME.md -->
+> 【[English](./NAME.md)|中文】      <!-- in NAME.cn.md -->
+```
+
+The Chinese copy mirrors the English one section by section: same heading count and levels, same code blocks, same tables. Translate prose, code comments, table cells, Mermaid labels and ASCII-diagram labels; keep the code itself identical, so a sample can be pasted from either copy. String literals inside samples (`console.log('Received:', …)`) are the one exception — translating them is fine, the surrounding code is not.
+
+Edit the English copy first, then port the change; a section that exists in only one language is a bug. Mirror the structure, not the length — Chinese is denser, so the 956-line `pubsub.md` mirrors as ~909 lines.
+
+Anchors: a Chinese heading's anchor drops punctuation, so `### 模式（正则）订阅` is linked as `#模式正则订阅`. Cross-document links from `README.cn.md` point at `pubsub.cn.md`, not at the English copy.
+
+Markdown is deliberately outside prettier (see Code Style), which is what keeps the ASCII diagrams intact — the price is that alignment is manual. In a Chinese box each CJK glyph is 2 columns, so pad to display width, not to character count.
+
 ## Testing
 
 ```shell
-pnpm test         # Unit tests (vitest, 94 tests)
+pnpm test         # Unit tests (vitest, 145 tests)
 pnpm test:repeat   # Unit tests, 3 repeats (vitest --repeats) — flakiness check
-pnpm test:e2e     # Browser E2E tests (Playwright, 59 tests)
-pnpm test:examples # Browser example app (examples/browser-e2e, 47 checks)
+pnpm test:e2e     # Browser E2E tests (Playwright, 77 tests)
+pnpm test:examples # Browser example app (examples/browser-e2e, 53 checks)
 pnpm test:all     # All tests (unit + E2E)
 ```
 

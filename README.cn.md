@@ -72,7 +72,7 @@ E2E 测试覆盖范围：
 npm install @isdk/tool-event
 ```
 
-客户端的 SSE 传输使用 [`eventsource`](https://github.com/EventSource/eventsource)，声明为本包的 **peer dependency**（对等依赖）。该实现与运行环境无关 —— 浏览器和 Node.js 中运行的是同一份代码，而 Node.js 本身并没有内置 `EventSource` —— 因此本包直接导入该类，而不是读取全局对象。包管理器会自动安装 peer dependency；如果你的安装流程会跳过 peer dependency，请额外执行 `npm install eventsource`。传输层接口（含正则订阅）见 [pubsub.md](./pubsub.md)。
+客户端的 SSE 传输使用 [`eventsource`](https://github.com/EventSource/eventsource)，声明为本包的 **peer dependency**（对等依赖）。该实现与运行环境无关 —— 浏览器和 Node.js 中运行的是同一份代码，而 Node.js 本身并没有内置 `EventSource` —— 因此本包直接导入该类，而不是读取全局对象。包管理器会自动安装 peer dependency；如果你的安装流程会跳过 peer dependency，请额外执行 `npm install eventsource`。传输层接口（含正则订阅）见 [pubsub.cn.md](./pubsub.cn.md)。
 
 ### 2. 服务端设置 (`server.ts`)
 
@@ -146,7 +146,7 @@ main().catch(console.error);
 
 `@isdk/tool-event` 系统构建在一个强大而灵活的架构之上，该架构将事件逻辑与底层通信协议分离开来。其核心是一个**可插拔的发布/订阅（PubSub）传输层**，允许您通过简单地提供一个兼容的传输实现，来使用服务器发送事件（SSE）、WebSockets、IPC 或任何其他协议。
 
-要获取完整的开发者指南，请参阅 [**PubSub 开发者指南 (pubsub.md)**](./pubsub.md)。
+要获取完整的开发者指南，请参阅 [**PubSub 开发者指南 (pubsub.cn.md)**](./pubsub.cn.md)。
 
 ### 统一事件总线
 
@@ -307,7 +307,7 @@ eventClient.on('/^user-.*/', (name: string, data: any) => console.log(name, data
 eventServer.forward(['/^log-(error|warning)$/i'])
 ```
 
-只有形如 `/source/flags` 的字符串才会被当作正则；匹配时 `g` 与 `y` 标志会被忽略；精确事件名与覆盖它的正则同时订阅时，事件只投递**一次**而不会重复。完整规则见[模式（正则）订阅](./pubsub.md#pattern-regex-subscriptions)。
+只有形如 `/source/flags` 的字符串才会被当作正则；匹配时 `g` 与 `y` 标志会被忽略；精确事件名与覆盖它的正则同时订阅时，事件只投递**一次**而不会重复。完整规则见[模式（正则）订阅](./pubsub.cn.md#模式正则订阅)。
 
 ### 4. 客户端事件转发
 
