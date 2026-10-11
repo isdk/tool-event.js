@@ -19,7 +19,7 @@
     // 编辑器/类型检查把包名直接映射到 src，这样 `tsc -p tsconfig.json` 不依赖
     // dist 里的 .d.ts（test/e2e/main.ts 是按发布入口 `@isdk/tool-event/browser` 写的）。
     // 运行时解析仍走 package.json 的 exports，不受这里影响。
-    "baseUrl": ".",
+    // paths 相对本文件解析，不要加 baseUrl（TS 已废弃该选项，7.0 会直接失效）。
     "paths": {
       "@isdk/tool-event": ["./src/index.ts"],
       "@isdk/tool-event/browser": ["./src/browser.ts"],
