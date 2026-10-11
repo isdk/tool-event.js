@@ -1,5 +1,7 @@
 # @isdk/tool-event — LLM Quick Start Guide
 
+> 【English|[中文](./AGENT.cn.md)】
+
 A real-time, bidirectional Pub/Sub event system that plugs into the `@isdk/tool-rpc` RPC framework. Events are just another "tool" — discoverable and callable through the standard RPC mechanism.
 
 ## Package Identity

@@ -1,5 +1,7 @@
 # @isdk/tool-event — LLM 快速入门指南
 
+> 【[English](./AGENT.md)|中文】
+
 一个实时、双向的发布/订阅 (Pub/Sub) 事件系统，可插入 `@isdk/tool-rpc` RPC 框架。事件只是另一种"工具"——通过标准 RPC 机制即可发现和调用。
 
 ## 包信息

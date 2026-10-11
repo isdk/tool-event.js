@@ -1,8 +1,10 @@
 # Developer's Guide: Real-time Events with EventServer & EventClient
 
+> 【English|[中文](./pubsub.cn.md)】
+
 This guide provides a comprehensive overview of the `EventServer` and `EventClient` system, a powerful solution for building real-time, bidirectional communication channels. Its core architecture is built on a **pluggable PubSub transport layer**, making it completely independent of any specific communication protocol. You can seamlessly use Server-Sent Events (SSE), WebSockets, IPC, or any other protocol by simply providing a compatible transport implementation.
 
-**Prerequisite:** This document assumes you understand the base transport layer. If not, please review the [`transport.md`](./transport.md) first.
+**Prerequisite:** This document assumes you understand the base transport layer of `@isdk/tool-rpc` — the RPC transport that carries the control plane. See the transport documentation of `@isdk/tool-rpc`; it is not re-explained here.
 
 ## Core Concept: The Unified Event Bus
 
@@ -90,7 +92,8 @@ graph TD
     PST[PubSubServerTransport<br><i>向客户端广播事件</i>]
 
     %% ========== Connections ==========
-    EC -- "RPC: publish（'client:xxx', data）（需 forwardEvent）" --> CT
+    EC -- "RPC: publish（原始事件名, data）（需 forwardEvent）" --> CT
+    Note1["服务端收到后才加 client: 前缀<br/>客户端始终使用原始事件名"]
     CT -- "→ RPC 请求" --> ST
     ST -- "→ 交由 EventServer 处理" --> ES
 
@@ -221,17 +224,114 @@ async function main() {
 > es.addEventListener('my.event', (event) => console.log(event.data));
 > ```
 
+## Session Identity and Resume
+
+An SSE stream is a **session**, not just a connection. The server issues the session's
+`clientId` in the `welcome` event, and every `$sub` / `$publish` call is matched against
+that session — never against an id the client puts in its payload. That is what makes
+the `senderId` returned by `$publish` trustworthy.
+
+```typescript
+// The server assigns the id; the client reads it, it does not choose it.
+await eventClient.setActive(true)
+console.log(eventClient.clientId) // server-assigned, and it follows the session
+```
+
+A stream that drops re-opens carrying the resume credential `welcome` handed back
+(`sessionToken`), so the outage costs the client nothing: same `clientId`, same
+subscription list — including subscriptions added over RPC after the stream opened —
+and replay of every message it had not acknowledged.
+
+```typescript
+// The credential rides in the URL of the re-opened stream (`session_token`), because
+// EventSource can send neither headers nor a changed URL on a live connection. The
+// last event id the client acknowledged rides with it (`last_event_id`), and the
+// channel replays from there. Listeners registered on the stream are replayed onto
+// the new connection, exact and regex subscriptions alike.
+```
+
+### The identity policy
+
+Who a connecting request belongs to is a policy, not a constant. It is injectable, so
+an external auth protocol plugs in by **replacing** the policy — the event protocol
+itself does not change.
+
+```typescript
+import { SseServerPubSubTransport, type SSEIdentityPolicy } from '@isdk/tool-event';
+
+EventServer.setPubSubTransport(new SseServerPubSubTransport({
+  identity: myIdentityPolicy, // e.g. verify a signed token from your auth service
+}))
+```
+
+```typescript
+interface SSEIdentityPolicy {
+  readonly name: string
+  /** The session id this request is resuming, if it presents a valid credential. */
+  resolve: (ctx: { req: IncomingMessage }) => string | undefined
+  /** Mint the session id for a fresh connection. */
+  issue: (ctx: { req: IncomingMessage }) => string
+  /** The credential handed back in `welcome`. Omit it to disable resuming. */
+  credential?: (clientId: string) => string | undefined
+  /** Drop a client's credential(s), e.g. when its stream is closed for good. */
+  revoke?: (clientId: string) => void
+}
+```
+
+The default (`SSETokenIdentityPolicy`, built by `createSSEIdentity`) mints the session
+id server-side and issues an opaque token bound to it: a reconnect presenting an issued
+token resumes that session, and a token the server never issued resolves to nothing — so
+a forged id/token never selects one. It takes `{ ttlMs: 30_000, maxUses: 5 }`; the TTL
+slides forward every time the credential is presented (an idle credential lapses, an
+active one does not), and re-issuing deliberately does **not** reset the use count.
+
+### Tuning resume
+
+A session has **one live stream**: a second connection carrying the credential takes the
+session over (the stream it replaces is closed), so a publish is delivered once per
+`clientId`. Channel options are passed through `channelOptions`:
+
+```typescript
+EventServer.setPubSubTransport(new SseServerPubSubTransport({
+  tokenIdentity: { ttlMs: 60_000, maxUses: 10 }, // options for the default policy
+  channelOptions: { resumeWindow: 30_000, maxStreamDuration: 30_000, historySize: 100 },
+}))
+```
+
+| Option | Default | Effect |
+|---|---|---|
+| `resumeWindow` | 30s | How long a dropped session may be resumed with its subscription list. The window reopens at every drop and at every connect, so a session that keeps dropping stays resumable; `0` turns every reconnect into a new session. |
+| `maxStreamDuration` | 30s | The server ends the stream on a timer. That is a drop like any other: it opens the resume window, and the client resumes the same session without knowing the difference. `0` disables the limit. |
+| `historySize` | 100 | How far back a reconnect can be replayed. Replay covers everything published since the id the client acknowledged, as long as it is still in this buffer and matches the resumed session's subscription list — including messages published *while* the session was down. |
+| `pingInterval` | 3000 | Interval for ping frames. |
+| `clientRetryInterval` | 1000 | The `retry:` hint sent to clients. |
+| `rewind` | 0 | Number of historical messages sent to *new* clients. |
+
+> ⚠️ **A credential is not an authentication token.** It names a session and nothing
+> more. Authentication stays outside the event protocol: an external auth protocol
+> replaces the policy, it does not extend it.
+
 ## Example: Electron IPC for Real-time Desktop Apps
 
 For desktop applications built with Electron, the event system can operate over the built-in Inter-Process Communication (IPC) channels. This provides a highly efficient, real-time backend within your application shell without needing an HTTP server.
 
-> 💡 The transports shown in this section (`ElectronServerPubSubTransport`, `ElectronClientPubSubTransport`, `IpcServerToolTransport`, `IpcClientToolTransport`) are **not included in `@isdk/tool-event`**. They serve as conceptual examples to illustrate how the pluggable transport architecture works. To use these transports, you would need to implement them following the `IPubSubServerTransport` / `IPubSubClientTransport` interfaces, or install a separate extension package.
+> 📦 These transports ship in their own package, **`@isdk/tool-electron`** (`npm install @isdk/tool-electron`; `electron` is a peer dependency). They implement the `IPubSubServerTransport` / `IPubSubClientTransport` interfaces from `@isdk/tool-event`, so nothing in `EventServer` / `EventClient` changes.
+>
+> Import from the entry that matches the process:
+>
+> - **`@isdk/tool-electron/server`** — main process only. Exports `IpcServerToolTransport` and `ElectronServerPubSubTransport`, and deliberately imports no `ipcRenderer`, so a main-process bundle stays clean.
+> - **`@isdk/tool-electron`** — renderer/preload. Exports `IpcClientToolTransport` and `ElectronClientPubSubTransport` (plus the server classes).
+>
+> Channel names are derived from an `apiUrl` in `electron://` form: `'electron://my-app'` → namespace `my-app` → channels `my-app:discover` and `my-app:rpc`. A bare namespace (`'my-app'`) is accepted too; the `electron://` form is the convention.
 
 We will cover two scenarios: using IPC for Pub/Sub only, and a fully integrated approach where both RPC and Pub/Sub use IPC.
 
 ### Scenario 1: Standalone Pub/Sub over IPC
 
-This approach is ideal if you only need a real-time eventing layer or if your main RPC communication uses a different transport (e.g., HTTP).
+This approach is ideal if you only need a real-time eventing layer, or if your main RPC
+communication uses a different transport (e.g., HTTP). It drives the transport directly;
+the `EventClient` API (`subscribe` / `unsubscribe` / `publish`) is not available here,
+because those are RPC calls and this scenario sets up no RPC transport.
 
 #### Main Process Setup (`main.ts`)
 
@@ -239,10 +339,11 @@ You only need to set up the `ElectronServerPubSubTransport` and tell it to start
 
 ```typescript
 // In your main Electron process (e.g., main.ts)
-import { EventServer, ElectronServerPubSubTransport } from '@isdk/tool-event';
+import { EventServer } from '@isdk/tool-event';
+import { ElectronServerPubSubTransport } from '@isdk/tool-electron/server';
 
 // 1. Define a unique namespace for your pub/sub channels.
-const pubSubNamespace = 'my-app-events';
+const pubSubNamespace = 'electron://my-app-events';
 
 // 2. Create an instance of the server transport.
 const serverTransport = new ElectronServerPubSubTransport(pubSubNamespace);
@@ -263,36 +364,37 @@ setInterval(() => {
 
 #### Renderer Process Setup (`renderer.ts`)
 
-The client setup is also straightforward. You must configure the `EventClient` with the same namespace.
+Use the transport **directly** here. `eventClient.subscribe()` is an RPC call (it maps to
+`$sub` on the control plane), so it needs the RPC transport from Scenario 2 — with no
+RPC set up, drive the stream yourself:
 
 ```typescript
 // In your client-side code (e.g., renderer.ts)
-import { EventClient, eventClient, ElectronClientPubSubTransport, backendEventable } from '@isdk/tool-event';
+import { ElectronClientPubSubTransport } from '@isdk/tool-electron';
 
 // 1. Use the same namespace as the server.
-const pubSubNamespace = 'my-app-events';
+const pubSubNamespace = 'electron://my-app-events';
 
-// 2. Set the PubSub transport for the client.
-EventClient.setPubSubTransport(new ElectronClientPubSubTransport());
+// 2. **Crucial Step: give the transport its namespace.**
+// IPC channel names are derived from it, so the transport cannot be created without
+// one. Pass it to the constructor — the alternative (`EventClient.apiUrl` *before*
+// `setPubSubTransport`) works only in that order: `setPubSubTransport` forwards the
+// apiUrl to the transport via `setApiRoot`, and an apiUrl set afterwards reaches a
+// transport that has already derived (missing) channels.
+const pubsub = new ElectronClientPubSubTransport(pubSubNamespace);
 
-// 3. **Crucial Step: Configure the EventClient with the namespace.**
-// This is used as the 'apiUrl' to determine which IPC channels to use.
-EventClient.apiUrl = pubSubNamespace;
+// 3. Open the stream and listen.
+const stream = pubsub.connect(pubsubNamespace);
 
-// 4. Make the client eventable and register it.
-backendEventable(EventClient);
-eventClient.register();
-
-// 5. Subscribe to events. This automatically triggers the connection to the main process.
-await eventClient.subscribe('server-tick');
-
-eventClient.on('server-tick', (name, data) => {
+stream.on('server-tick', (data) => {
   console.log('Received tick from main process:', data);
   document.body.innerHTML = `Tick received at: ${data.timestamp}`;
 });
 ```
 
-> **Note on Security**: This simple example assumes `contextIsolation` is disabled. For modern, secure Electron apps, please see the integrated example below which includes a `preload.js` script.
+> **Note on Security**: This simple example assumes `contextIsolation` is disabled — it
+> uses the raw `ipcRenderer`. For modern, secure Electron apps, see the integrated
+> example below, which injects a `preload.js` bridge.
 
 ### Scenario 2: Integrated RPC and Pub/Sub over IPC
 
@@ -335,40 +437,53 @@ Here, we set up both the `IpcServerToolTransport` for RPC and the `ElectronServe
 ```typescript
 // main.ts
 import { EventServer, eventServer } from '@isdk/tool-event';
-import { IpcServerToolTransport, ServerTools } from '@isdk/tool-rpc';
-import { ElectronServerPubSubTransport } from '@isdk/tool-event';
+import { ServerTools } from '@isdk/tool-rpc';
+import {
+  IpcServerToolTransport,
+  ElectronServerPubSubTransport,
+} from '@isdk/tool-electron/server';
 
-// Use a single, consistent namespace for all IPC channels
-const channelNamespace = 'my-app';
+// RPC and Pub/Sub use separate namespaces; both are `electron://` URIs.
+const rpcUrl = 'electron://my-app';
+const pubSubUrl = 'electron://my-app-events';
 
 // --- 1. Setup IPC for standard RPC ---
-const rpcTransport = new IpcServerToolTransport();
 // This sets up handlers for 'my-app:discover' and 'my-app:rpc'.
-rpcTransport.addRpcHandler(channelNamespace);
-rpcTransport.addDiscoveryHandler(channelNamespace, () => ServerTools.toJSON());
-rpcTransport.start();
-console.log(`[Main] RPC transport started on namespace: ${channelNamespace}`);
+const rpcTransport = new IpcServerToolTransport({ apiUrl: rpcUrl });
+rpcTransport.addRpcHandler(rpcUrl);
+rpcTransport.addDiscoveryHandler(rpcUrl, () => ServerTools.toJSON());
+await rpcTransport.start();
+console.log(`[Main] RPC transport started on ${rpcTransport.getListenAddr()}`);
 
 // --- 2. Setup IPC for Pub/Sub ---
-const pubsubTransport = new ElectronServerPubSubTransport(channelNamespace);
+const pubsubTransport = new ElectronServerPubSubTransport(pubSubUrl);
 EventServer.setPubSubTransport(pubsubTransport);
 pubsubTransport.listen(); // Activate the pub/sub listeners
-console.log(`[Main] Pub/Sub transport listening on namespace: ${channelNamespace}`);
+console.log(`[Main] Pub/Sub transport listening on ${pubSubUrl}`);
 
 // --- 3. Register Tools ---
 // Register the eventServer so its methods (sub, unsub) can be called via RPC
 eventServer.register();
 ```
 
+> `stop()` removes **every** IPC channel this transport bound and releases its route
+> registration. Skipping it leaves the same `electron://` address reporting a
+> `Routing Conflict` on the next start.
+
 #### Part 3: Renderer Process Setup (`renderer.ts`)
 
-The renderer will use the `electronApi` exposed by the preload script. To make this work seamlessly, you can create simple wrapper classes for your transports that use the bridged API instead of the raw `ipcRenderer`.
+The renderer uses the `electronApi` exposed by the preload script. Both transports accept that bridge **as an option** — they call `bridge.invoke` / `bridge.on` / `bridge.send` instead of importing `ipcRenderer` — so no wrapper subclasses are needed.
 
 ```typescript
 // renderer.ts
 import { EventClient, eventClient, backendEventable } from '@isdk/tool-event';
-import { IpcClientToolTransport, ClientTools } from '@isdk/tool-rpc';
-import { ElectronClientPubSubTransport } from '@isdk/tool-event';
+import { ClientTools } from '@isdk/tool-rpc';
+import {
+  IpcClientToolTransport,
+  ElectronClientPubSubTransport,
+  type Bridge,
+  type PubSubBridge,
+} from '@isdk/tool-electron';
 import type { ElectronApi } from './preload';
 
 // Make the bridged API available on the window object for TypeScript
@@ -376,41 +491,26 @@ declare global {
   interface Window { electronApi: ElectronApi; }
 }
 
-// --- Custom Transports Using the Secure Bridge ---
-
-// 1. Create a custom RPC transport that uses the bridged `invoke` method.
-class SecureIpcRpcTransport extends IpcClientToolTransport {
-  async _fetch(name: string, args?: any, act?: any, subName?: any) {
-    const payload = { toolId: name, params: args || {}, act, id: subName };
-    return window.electronApi.invoke(this.channels.rpc, payload);
-  }
-  async loadApis() {
-    return window.electronApi.invoke(this.channels.discover);
-  }
-}
-
-// 2. Create a custom Pub/Sub transport that uses the bridged API.
-// This pattern requires that the base transport class allows for dependency injection.
-class SecureIpcPubSubTransport extends ElectronClientPubSubTransport {
-  constructor() {
-    // Pass the bridged API to the constructor instead of letting it use the global ipcRenderer
-    super(window.electronApi as any);
-  }
-}
-
-// --- Application Setup ---
 async function main() {
-  const channelNamespace = 'my-app';
+  const rpcUrl = 'electron://my-app';
+  const pubSubUrl = 'electron://my-app-events';
 
-  // Use the secure RPC transport
-  const rpcTransport = new SecureIpcRpcTransport();
-  ClientTools.apiUrl = channelNamespace;
+  // The same bridged object satisfies both shapes: `Bridge` needs `invoke`,
+  // `PubSubBridge` needs `on` / `off` / `send`.
+  const bridge: Bridge = window.electronApi;
+  const pubsubBridge: PubSubBridge = window.electronApi;
+
+  // --- 1. RPC over the bridge ---
+  const rpcTransport = new IpcClientToolTransport(rpcUrl, { bridge });
+  rpcTransport.mount(ClientTools); // mounts the transport and its apiUrl on ClientTools
   await ClientTools.loadFrom();
 
-  // Use the secure Pub/Sub transport
-  const pubsubTransport = new SecureIpcPubSubTransport();
-  EventClient.setPubSubTransport(pubsubTransport);
-  EventClient.apiUrl = channelNamespace;
+  // --- 2. Pub/Sub over the bridge ---
+  // The namespace goes to the constructor (2nd argument is the bridge — not the
+  // first: passing the bridge as the first argument makes it the apiRoot).
+  EventClient.setPubSubTransport(
+    new ElectronClientPubSubTransport(pubSubUrl, { bridge: pubsubBridge }),
+  );
 
   backendEventable(EventClient);
   eventClient.register();
@@ -424,6 +524,12 @@ async function main() {
 
 main();
 ```
+
+> ⚠️ **Pattern (regex) subscriptions are not delivered over the Electron transport.**
+> `ElectronClientPubSubTransport` implements no `addRegExEventListener`, so a regex
+> subscription there is accepted by the server, warns once per pattern, and is skipped
+> locally (see [Pattern (Regex) Subscriptions](#pattern-regex-subscriptions)). Use
+> exact event names, or a transport that implements the regex pair.
 
 ---
 
@@ -494,7 +600,8 @@ To enable this feature, you must set the static `autoInjectToLocalBus` property 
 import { EventServer } from '@isdk/tool-event';
 
 // Set to true to allow client events to be emitted on the server bus.
-EventServer.autoInjectToLocalBus = true;```
+EventServer.autoInjectToLocalBus = true;
+```
 
 Only when this is set to `true` will the server emit `client:` prefixed events on its internal bus.
 
@@ -516,7 +623,7 @@ eventBus.on('data-updated', (data) => {
 
 #### Example 2: Listening for a Client-Originated Event
 
-To react to an event published by a client, you must explicitly listen for the event name with the `client:` prefix. The listener will also receive a metadata object containing the trusted, server-verified `clientId`.
+To react to an event published by a client, you must explicitly listen for the event name with the `client:` prefix. The listener also receives a metadata object carrying the session the event came from.
 
 ```typescript
 import { event } from '@isdk/tool-event';
@@ -527,12 +634,18 @@ const eventBus = event.runSync();
 
 // The server-side listener must use the 'client:' prefix.
 eventBus.on('client:user-action', (data, meta) => {
-  // The 'meta' object contains the trusted clientId from the transport layer.
-  const { clientId } = meta;
+  // meta is `{ event, sender }`: `event` is the ORIGINAL (unprefixed) name, and
+  // `sender` is the transport session the server resolved for this request.
+  // The trusted clientId lives on the session — not on meta itself.
+  const clientId = meta?.sender?.clientId;
   console.log(`User ${clientId} performed an action with data:`, data);
   // ...logic to handle the client interaction
 });
 ```
+
+> `sender` is the session object, so it is `undefined` when the request carried no
+> resolvable session (a transport without `getSessionFromReq`, or a call that did not
+> come through a stream). Guard it before reading `clientId`.
 
 ### Subscribing, Listening, and Publishing (Client-Side)
 
@@ -568,7 +681,7 @@ function onSettingsSave(newSettings: any) {
 Every subscription API accepts patterns as well as plain event names, so one
 subscription can cover a whole family of events. Patterns work identically on
 the server (`forward` / `unforward`) and on the client (`subscribe` /
-`unsubscribe`, `on` / `off`, `forwardEvent` / `unforwardEvent`).
+`unsubscribe`, `on` / `off`).
 
 ```typescript
 // String-form regex — the same `/source/flags` syntax events-ex uses.
@@ -579,14 +692,31 @@ eventServer.forward([/^order-/])
 
 await eventClient.subscribe(['/^user-.*/'])
 eventClient.on('/^user-.*/', (name: string, data: any) => console.log(name, data))
-eventClient.forwardEvent(['/^user-settings-.*/'])
+```
+
+**`forwardEvent` / `unforwardEvent` are the exception.** Their signature is
+`string | string[]`, so a `RegExp` argument is a type error
+(`Type 'RegExp' is not assignable to type 'string'`). A string-form pattern does
+reach the local bus — forwarding registers through the injected `on()`, which
+accepts `/source/flags` — but it is **not recommended**, because the loop guard
+`_forwardEvents.has(evtType)` compares the *pattern text* against the *real event
+name* and never matches. A forwarded event that the server broadcasts back is
+therefore re-emitted locally, forwarded up again, and broadcast again: a runaway
+echo. Forward exact event names, and register the pattern separately if you need
+pattern matching on the uplink.
+
+```typescript
+eventClient.forwardEvent(['user-settings-changed']) // ✅ exact name
+eventClient.forwardEvent(['/^user-settings-.*/'])    // ⚠️ works, but echoes (see above)
+eventClient.forwardEvent([/^user-settings-.*/])      // ❌ type error
 ```
 
 **What counts as a pattern.** A string is treated as a regex only when it starts
-with `/`, ends with `/` (plus optional flags), and has a non-empty source — so
-`'/[/'` and `'//'` stay plain event names. A string and the regex built from the
-same source are one subscription: they share a key and deduplicate against each
-other.
+with `/`, ends with `/` (plus optional flags), and parses as a valid pattern — so
+`'/[/'` (invalid source), `'/'` and `'//'` stay plain event names. An empty source
+with flags (`'//i'`) *does* count, and matches every event; do not write one by
+accident. A string and the regex built from the same source are one subscription:
+they share a key and deduplicate against each other.
 
 **Flags.** `i`, `m`, `s`, `u` and `d` are honored. `g` and `y` are dropped for
 matching, because `RegExp.prototype.test` advances `lastIndex` under those flags
@@ -618,6 +748,27 @@ For developers who need to integrate a different messaging protocol (e.g., WebSo
 ### Server-Side: `IPubSubServerTransport`
 
 The server-side implementation is responsible for managing client connections and broadcasting events. You implement the `IPubSubServerTransport` interface from `@isdk/tool-event`.
+
+The session object the interface hands back is part of the contract:
+
+```typescript
+export type PubSubClientId = string;
+
+export interface PubSubServerSession {
+  /** Id of this session, generated by the transport on connect. */
+  id: string;
+  /** The client id the session is matched on (`$sub` / `$publish` resolve to it). */
+  clientId?: PubSubClientId;
+  /** Protocol of this session, e.g. 'sse', 'ws', 'ipc', 'electron'. */
+  protocol: 'sse' | 'ws' | 'ipc' | string;
+  /** Sends an event and data to this session's client. */
+  send: (event: string, data: any, ctx?: PubSubCtx) => void;
+  /** Closes this session's connection. */
+  close: () => void;
+  /** The raw underlying handle (Node `ServerResponse`, WebSocket, …). Use with care. */
+  raw?: any;
+}
+```
 
 The core interface is defined as follows:
 
@@ -727,7 +878,23 @@ The stream returned by `connect` must implement `on`/`off` for exact event names
 
 ```typescript
 interface PubSubClientStream {
+  /** Required. The session id for this connection. `EventClient` exposes it as
+   *  `clientId` and copies it into the RPC header, so `$sub`/`$publish` are matched
+   *  against the session the server issued — never against an id the client picked. */
+  clientId: string;
+
+  /** Required. Protocol of this stream ('sse', 'ws', 'ipc', 'electron', …).
+   *  It is what the regex-unsupported warning names. */
+  protocol: 'sse' | 'ws' | 'ipc' | string;
+
+  /** Optional. 0 connecting, 1 open, 2 closed. `EventClient` treats 2 as closed and
+   *  re-opens the stream on demand. */
+  readyState?: number;
+
   // ...on / off / close
+
+  /** Optional. Only for bidirectional transports (WS/IPC); SSE has no upstream. */
+  send?: (event: string, data: any, ctx?: PubSubCtx) => void;
 
   /** Registers a listener for a RegExp or string-form regex ('/^user-.*/').
    *  Optional: EventClient warns once per pattern when a regex subscription is
@@ -753,4 +920,37 @@ their listener calls so a throwing listener cannot tear down the connection.
 
 The `EventClient` automatically handles the `apiRoot` configuration, making the system easy to use. The `connect` method is the most critical part, as it decouples the `EventClient` from the specifics of how a connection is made.
 
+> **Ordering matters.** `EventClient.setPubSubTransport` calls `setApiRoot(apiUrl)` on
+> the transport **only if `EventClient.apiUrl` is already set** — an apiUrl assigned
+> afterwards reaches a transport that has already been handed no root. Set `apiUrl`
+> first, or take the root in the transport's constructor.
+
 By implementing both interfaces, you can enable the entire real-time event system over your chosen protocol.
+
+### What a custom transport inherits — and what it must add
+
+Two behaviors live in `EventServer` / `EventClient`, so a custom transport gets them
+for free: pattern matching and dedup are driven by the client/server bookkeeping, and
+the `client:` prefixing of client-originated events is applied by `EventServer`.
+
+Two do **not**, and are the transport's own responsibility:
+
+- **Pattern delivery.** `EventServer` forwards a matched event to `publish()`; only
+  `addRegExEventListener` on the stream makes the client fire **one** listener per
+  event. Omit it and pattern subscriptions warn once and are skipped.
+- **Session resume.** The SSE transport issues a credential in `welcome`, re-opens the
+  dropped stream carrying it, replays listeners, and keeps exactly one live stream per
+  session. A transport that does not implement this loses the session on every drop:
+  new `clientId`, and a subscription list rebuilt from the reconnect URL — i.e. the list
+  from the *first* connect, so anything subscribed afterwards is silently lost. A
+  bidirectional transport can resume over its own channel (no URL constraint); a
+  unidirectional one must carry the credential in the connect parameters, as SSE does.
+
+### When no transport is set
+
+The two sides fail differently, and neither is loud:
+
+- `EventServer.pubSubTransport` logs `EventServer pubSubTransport not set` and returns
+  `undefined` — `publish()` is a silent no-op. The `list` / `$sub` / `$unsub` RPC calls
+  do throw `NotImplemented`.
+- `EventClient.pubSubTransport` throws `EventClient pubSubTransport not set`.
