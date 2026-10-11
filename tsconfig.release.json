@@ -1,0 +1,28 @@
+{
+  // 发包专用：tsup --dts / typedoc 用这份配置，排除测试文件。
+  // 编辑器与类型检查请用根目录的 tsconfig.json。
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["node"],
+    "noEmit": false,
+    // 发包时不能把包名映射回 src，清空继承来的 paths
+    "paths": {},
+    // 继承自 tsconfig.json，但非 noEmit 时不允许 .ts 后缀 import
+    "allowImportingTsExtensions": false
+  },
+  // 本项目不发布 test/ 与 examples/ 里的任何文件，整个排除：
+  // test/e2e/main.ts 是按发布入口写浏览器端代码的，留在 program 里
+  // 会让 tsup --dts / typedoc 依赖 dist 里的 .d.ts。
+  "exclude": [
+    "node_modules",
+    "dist",
+    "web",
+    "docs",
+    "test",
+    "examples",
+    "**/*.test.ts",
+    "**/*.spec.ts",
+    "**/*.test.js",
+    "**/*.spec.js"
+  ]
+}

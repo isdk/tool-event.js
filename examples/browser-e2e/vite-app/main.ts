@@ -17,24 +17,13 @@ import {
   genUrlParamsStr,
   EventSource,
   backendEventable,
-  eventClient,
-  eventServer,
   EventName,
   EventBusName,
   ClientEventPrefix,
-  EventEmitter,
-  eventable,
-  EventStates,
-  wrapEventEmitter,
 } from '@isdk/tool-event/browser'
 
 import type {
-  PubSubCtx,
-  PubSubClientStream,
-  IPubSubClientTransport,
   IPubSubServerTransport,
-  PubSubServerSession,
-  PubSubClientId,
 } from '@isdk/tool-event/browser'
 
 // Import from the transports/pubsub/browser subpath to verify it resolves correctly
@@ -240,7 +229,7 @@ async function runTests() {
       }))
     }
     // Fire all events simultaneously
-    const firePromises = []
+    const firePromises: Promise<Response>[] = []
     for (let i = 0; i < CONCURRENT_COUNT; i++) {
       firePromises.push(
         fetch(SSE_URL + `/api/trigger?event=e2e-concurrent-${i}`, {

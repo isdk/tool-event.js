@@ -4,14 +4,32 @@
     "lib": ["ES2022", "DOM"],
     "module": "ESNext",
     "moduleResolution": "Bundler",
-    "types": ["node"],
     "strict": true,
-    // "strictNullChecks": false,
-    "typeRoots": [
-      "./types",
-      "./node_modules/@types",
-      "./node_modules/@microsoft"
-    ],
+    // 注意：这里不要再设置 typeRoots。一旦显式设置 typeRoots，
+    // compilerOptions.types 就只会在这些目录里查找，`vitest/globals`
+    // 会报 TS2688（Cannot find type definition file for 'vitest/globals'）。
+    // vitest 的 `globals: true` 只负责运行时注入，类型要靠下面这行。
+    // 不要把 "jest" 加进来：@types/jest 的全局声明会和 vitest/globals 冲突（TS6200），
+    // 所以 @types/jest 已从 devDependencies 移除。
+    "types": ["vitest/globals", "node"],
+    // 这份 tsconfig 只给编辑器 / 类型检查用（构建走 tsup + tsconfig.release.json），
+    // 所以可以开 allowImportingTsExtensions（import 带 .ts 后缀）。
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    // 编辑器/类型检查把包名直接映射到 src，这样 `tsc -p tsconfig.json` 不依赖
+    // dist 里的 .d.ts（test/e2e/main.ts 是按发布入口 `@isdk/tool-event/browser` 写的）。
+    // 运行时解析仍走 package.json 的 exports，不受这里影响。
+    "baseUrl": ".",
+    "paths": {
+      "@isdk/tool-event": ["./src/index.ts"],
+      "@isdk/tool-event/browser": ["./src/browser.ts"],
+      "@isdk/tool-event/transports/pubsub": [
+        "./src/transports/pubsub/index.ts"
+      ],
+      "@isdk/tool-event/transports/pubsub/browser": [
+        "./src/transports/pubsub/browser.ts"
+      ]
+    },
 
     "strictPropertyInitialization": false,
     "useDefineForClassFields": false,
@@ -23,13 +41,10 @@
     "noImplicitAny": false,
     "resolveJsonModule": true,
     "strictNullChecks": true,
-    "allowSyntheticDefaultImports": true,
+    "allowSyntheticDefaultImports": true
   },
-  "include": ["src/**/*"],
-  "exclude": [
-    "node_modules",
-    "**/*.spec.ts",
-    "**/*.test.ts",
-    "**/*.test.js",
-  ]
+  // 开发/编辑器视角：测试文件也要在 program 里，否则 VS Code 会把它们
+  // 当成 invisible file 放进 inferred project，types 配置对它们无效。
+  "include": ["src/**/*", "test/**/*"],
+  "exclude": ["node_modules", "dist", "web", "docs"]
 }

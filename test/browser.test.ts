@@ -5,8 +5,9 @@
  * correctly without pulling in Node.js-specific modules.
  */
 import http from 'node:http' // drives the SSE server below
+import type { AddressInfo } from 'node:net' // `server.address()` is typed `string | AddressInfo`
 
-import { describe, expect, it, vi, beforeAll, afterAll } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { waitForSettled } from './utils/wait'
 
 // ---------------------------------------------------------------------------
@@ -29,12 +30,10 @@ import {
   // event client
   EventClient,
   eventClient,
-  EventClientFuncParams,
 
   // event server (abstract)
   EventServer,
   eventServer,
-  EventServerFuncParams,
   ClientEventPrefix,
 
   // SSE client transport
@@ -276,7 +275,7 @@ describe('SseClientPubSubTransport (browser)', () => {
     })
     const port = await new Promise<number>((resolve) => {
       srv.listen(0)
-      srv.once('listening', () => resolve(srv.address().port))
+      srv.once('listening', () => resolve((srv.address() as AddressInfo).port))
     })
     try {
       await run(`http://localhost:${port}/api/`)

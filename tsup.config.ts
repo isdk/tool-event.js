@@ -2,6 +2,9 @@ import { defineConfig } from 'tsup'
 import { wasmLoader } from 'esbuild-plugin-wasm'
 
 export default defineConfig({
+  // 发包用 release 配置（排除测试文件、不注入 vitest 全局类型）；
+  // 根目录 tsconfig.json 是编辑器/类型检查用的（含测试文件）。
+  tsconfig: 'tsconfig.release.json',
   esbuildPlugins: [wasmLoader()],
   entry: {
     'index': 'src/index.ts',

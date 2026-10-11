@@ -1,0 +1,47 @@
+name: Style & Typecheck
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  style:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        node-version: [20, 22]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'pnpm'
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check format (prettier) and lint (eslint)
+        run: pnpm run style
+
+      # `typecheck` reads the package through its `exports` map, so the d.ts
+      # files have to exist before tsc runs.
+      - name: Build declarations
+        run: pnpm run build-fast --dts --dts-resolve
+
+      - name: Typecheck (src + test)
+        run: pnpm run typecheck

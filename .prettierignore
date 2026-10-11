@@ -2,3 +2,15 @@ node_modules
 dist
 web
 docs
+.cache
+
+# 由 commit-and-tag-version 生成
+CHANGELOG.md
+
+# 本地编辑器配置
+.vscode
+
+# Markdown 不在 format 脚本范围内（见 package.json）：
+# prettier 会重排文档里的 ASCII 架构图，并按 semi:false 删掉 ```ts 示例里的分号，
+# diff 里看不出真实改动。若要手动格式化某个 md 文件，先确认这两项不会发生。
+*.md

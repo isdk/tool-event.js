@@ -7,7 +7,6 @@ import { ToolFunc, Funcs } from '@isdk/tool-func';
 import { HttpServerToolTransport, HttpClientToolTransport, ResClientTools, ResServerTools, RpcActiveTaskTracker, RpcServerDispatcher, RpcTransportManager } from '@isdk/tool-rpc';
 import { EventServer } from '../src/event-server';
 import { EventClient } from '../src/event-client';
-import { event as eventBusProvider } from '../src/event';
 
 import { SseClientPubSubTransport, SseServerPubSubTransport } from "../src/transports/pubsub"
 
