@@ -6,20 +6,27 @@ Its core design philosophy is to **seamlessly integrate a publish/subscribe mode
 
 In short, `@isdk/tool-event` allows you to handle all events in a unified and simple way, whether they are events on remote services or local events.
 
-This package is built upon `@isdk/tool-func` and `@isdk/tool-rpc`. Please ensure you are familiar with their core concepts before proceeding.
+This package is built upon [`@isdk/tool-func`](https://github.com/isdk/tool-func.js) and [`@isdk/tool-rpc`](https://github.com/isdk/tool-rpc.js). Please ensure you are familiar with their core concepts before proceeding — each package documents itself in its own repository, and those guides are the authoritative copies (this package deliberately keeps no local copies of them, so they cannot go stale here):
+
+- [`@isdk/tool-func` — AGENT.md](https://github.com/isdk/tool-func.js/blob/main/AGENT.md) ([quick version](https://github.com/isdk/tool-func.js/blob/main/AGENT.Quick.md))
+- [`@isdk/tool-rpc` — AGENT.md](https://github.com/isdk/tool-rpc.js/blob/main/AGENT.md)
 
 ## 🧪 Testing
 
 The project includes both unit tests and browser-based E2E tests.
 
 ```bash
-# Unit tests (vitest, 94 tests)
+# Unit tests (vitest, 101 tests)
 pnpm test
 
-# Browser E2E tests (Playwright, Chromium, 59 tests)
+# Browser E2E tests (Playwright, Chromium, 77 tests)
+# The suite covers the data plane and the RPC control plane: the test server runs
+# an EventServer on a second port (/api/rpc/, proxied by Vite) so the browser
+# exercises discovery, $sub/$unsub/$publish, targeted publish, and reconnection
+# with Last-Event-ID replay for real.
 pnpm test:e2e
 
-# The browser example app (examples/browser-e2e, 47 checks)
+# The browser example app (examples/browser-e2e, 53 checks)
 pnpm test:examples
 
 # Unit tests, 3 repeats (vitest --repeats) — flakiness check (CI runs this)
@@ -198,6 +205,8 @@ The library elegantly abstracts a stateful, persistent connection (like SSE) int
 
 - **Getting the Event Stream**: When a client needs to subscribe to an event for the first time, the `EventClient` makes a request to `GET /api/event` (which is the `list` method of the `EventServer`). The response to this request is a persistent stream of type `text/event-stream`. The server assigns a unique UUID as the `clientId` and sends it back in a `welcome` event. Conceptually, this is equivalent to "getting" a resource that represents the real-time event flow.
 
+- **Session Identity and Resume**: The `welcome` event carries the server-assigned `clientId` plus a resume credential (`sessionToken`). Who a connection belongs to is decided by an injectable policy (`SSEIdentityPolicy`), defaulting to server-issued opaque tokens — so a client can never pick the id its `$sub`/`$publish` calls are matched on. When the connection drops, the client re-opens the stream carrying that credential and resumes the same session: same `clientId`, same subscription list, replay from the last event it saw. Replay covers everything published since the id the client last acknowledged (within the channel's history buffer, `historySize`), filtered by the resumed session's subscription list — so messages published while the connection was down arrive too. Authentication stays outside the event protocol — an external auth protocol replaces the policy, it does not extend it.
+
 - **Managing the Event Stream**: Subsequent actions like `subscribe` and `publish` can be seen as modifications to the state of this "resource," and they are handled through separate, conventional RPC requests.
 
 This design simplifies the complexity of real-time connection management into a clean REST/RPC model that developers are already very familiar with.
@@ -373,6 +382,39 @@ await eventClient.setActive(false); // Disconnect
 // Close the connection
 eventClient.close();
 ```
+
+### 6.1 Session Identity and Resume
+
+The SSE stream is a **session**. The server assigns its `clientId` in the `welcome` event, and every `$sub`/`$publish` call is matched against that session — never against an id the client puts in its payload.
+
+```typescript
+// The server assigns the id; the client reads it, it does not choose it.
+await eventClient.setActive(true);
+console.log(eventClient.clientId); // server-assigned, and it follows the session
+
+// A dropped stream re-opens carrying the resume credential that `welcome` handed
+// back (`sessionToken`), so the session survives the outage: same clientId, same
+// subscription list (including subscriptions added over RPC after the stream opened),
+// and replay of the messages the client had not acknowledged.
+```
+
+Who a connecting request belongs to is an injectable policy (`SSEIdentityPolicy`): `resolve` (credential → session), `issue` (id for a fresh connection), `credential` (what `welcome` hands back), `revoke` (when a session is gone). The default issues server-side opaque tokens with a TTL and a use limit; an external auth protocol plugs in by replacing the policy, not by extending the event protocol.
+
+```typescript
+EventServer.setPubSubTransport(new SseServerPubSubTransport({
+  identity: myIdentityPolicy, // e.g. verify a signed token issued by your auth service
+}));
+```
+
+Replay covers everything published since the id the client last acknowledged, as long as it is still in the channel's history buffer (`historySize`, default 100) and matches the session's subscription list — including messages published *while* the session was down.
+
+A session has **one live stream**: a second connection carrying the credential takes the session over (the stream it replaces is closed), so a publish is delivered once per `clientId`. Three channel options shape resume, passed through `new SseServerPubSubTransport({ channelOptions })`:
+
+| Option | Effect |
+|---|---|
+| `resumeWindow` (30s) | How long a dropped session may be resumed with its subscription list. The window reopens at every drop, so a session that keeps dropping stays resumable; `0` turns every reconnect into a new session. |
+| `maxStreamDuration` (30s) | The server ends the stream on a timer. That is a drop like any other: it opens the resume window, and the client resumes the same session without knowing the difference. `0` disables the limit. |
+| `historySize` (100) | How far back a reconnect can be replayed. |
 
 ### 7. Implementing and Using Pluggable Transports
 

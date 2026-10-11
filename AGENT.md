@@ -153,7 +153,7 @@ await eventClient.publish({ event: 'client-hello', data: { msg: 'Hi' } });
 | `init(events)` | Close & re-init stream with event subscriptions. |
 | `setActive(bool)` | Connect/disconnect the transport stream. |
 | `close()` | Close the transport stream. |
-| `get clientId` | The server-assigned UUID for this client. |
+| `get clientId` | The server-assigned UUID of the live session; follows it across a resume. |
 | `get active` | Whether the transport stream is open. |
 
 ### EventServer
@@ -209,6 +209,24 @@ eventBus.on('client:ui-click', (data, meta) => {
 ```typescript
 EventServer.publish('private-msg', { text: 'hi' }, { clientId: 'xxx' });
 ```
+
+## SSE Session Identity (injectable policy)
+
+Who a connecting request belongs to is decided by `SSEIdentityPolicy` (`src/utils/sse-identity.ts`), injected via `new SseServerPubSubTransport({ identity })` or `new SSEChannel({ identity })`:
+
+```typescript
+interface SSEIdentityPolicy {
+  readonly name: string
+  resolve: (ctx: { req }) => string | undefined   // session a valid credential resumes
+  issue: (ctx: { req }) => string                  // id for a fresh connection
+  credential?: (clientId: string) => string | undefined  // handed back in `welcome`
+  revoke?: (clientId: string) => void
+}
+```
+
+The default (`createSSEIdentity()`) mints server-issued opaque tokens with a TTL and a use limit, so a dropped connection resumes its session — same `clientId`, same subscriptions, replay from the last event id — and a credential the server never issued resolves to nothing. A client-supplied `clientId` is never adopted. Replay covers everything published since the id the client last acknowledged (within the channel's `historySize` buffer, filtered by the resumed session's subscriptions) — messages published while the session was down arrive too. An external auth protocol plugs in by replacing this policy; `EventServer`/`EventClient` do not change.
+
+A session has one live stream: a connection resuming a session whose stream is still live takes it over (the replaced stream is closed), so a publish is delivered once per `clientId`. Resume is shaped by three `SSEChannel` options, passed via `new SseServerPubSubTransport({ channelOptions })`: `resumeWindow` (bounds the resume; reopened at every drop, `0` disables it), `maxStreamDuration` (the server ends the stream on a timer — a drop like any other, it opens the window), `historySize` (replay depth).
 
 ## Custom Transport Interface
 

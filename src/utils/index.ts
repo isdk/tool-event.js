@@ -1,4 +1,5 @@
 export * from './event-ability'
 export * from './sse-channel'
+export * from './sse-identity'
 export * from './event-pattern'
 export * from './sse-payload'

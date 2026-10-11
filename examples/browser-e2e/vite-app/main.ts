@@ -22,6 +22,15 @@ import {
   ClientEventPrefix,
 } from '@isdk/tool-event/browser'
 
+// The control plane of the documented flow lives in tool-rpc: discovery pulls the
+// server's tool list, and EventClient's subscribe/publish are RPC calls. The dev
+// server proxies /api/rpc to the RPC port (see vite.config.mts).
+import {
+  ClientTools,
+  HttpClientToolTransport,
+  RpcTransportManager,
+} from '@isdk/tool-rpc'
+
 import type {
   IPubSubServerTransport,
 } from '@isdk/tool-event/browser'
@@ -562,6 +571,78 @@ async function runTests() {
     )
 
     regexStream.close()
+
+    // 17. Control plane: the documented flow end to end.
+    //     Discovery -> EventClient over RPC -> SSE stream served by EventServer.list
+    //     -> publish round-trips through the server.
+    // The data-plane tests above talk to a hand-rolled SSE server; this section is
+    // the only place the browser app exercises the RPC path the README documents.
+    setStatus('🛰 Testing RPC control plane...')
+    const RPC_ROOT = window.location.origin + '/api/rpc/'
+
+    RpcTransportManager.bindScheme('http', HttpClientToolTransport)
+
+    // EventClient is not eventable out of the box (the data-plane tests above patch
+    // `on`/`off` by hand). `backendEventable` installs the real emitter methods, and
+    // it resolves the bus through the registry, so the event-bus tool has to be
+    // registered before it is used — `rpcEvent.on(...)` below is then the same API
+    // a real consumer uses.
+    event.register()
+    backendEventable(EventClient)
+
+    // Register the client tool locally first: discovery then merges the server's
+    // metadata into this instance (`assign`), which is what keeps it an EventClient
+    // rather than a plain remote tool handle.
+    const rpcEvent = new EventClient('event')
+    rpcEvent.register()
+
+    ClientTools.apiUrl = RPC_ROOT
+    await withTimeout(ClientTools.loadFrom(), TEST_TIMEOUT, 'RPC discovery')
+    const discovered = ClientTools.get('event') as EventClient
+    report('RPC: discovery reached the server and merged the event tool',
+      discovered === rpcEvent, `apiUrl: ${RPC_ROOT}`)
+
+    // The transport picks up the static apiUrl when it is installed, so the
+    // EventSource URL the client builds is RPC_ROOT + 'event'.
+    EventClient.setPubSubTransport(new SseClientPubSubTransport())
+
+    await withTimeout(rpcEvent.init(['ctrl-a', 'ctrl-b']), TEST_TIMEOUT, 'EventClient.init over RPC')
+    report('RPC: EventClient opened its SSE stream on the RPC endpoint',
+      !!rpcEvent.clientId && rpcEvent.active,
+      `clientId: ${rpcEvent.clientId}`)
+
+    let ctrlHits = 0
+    // `backendEventable` emits as `(toolName, ...payload)`, matching the unit suite.
+    const ctrlP = new Promise<any>(resolve => rpcEvent.on('ctrl-a', (name: string, data: any) => {
+      ctrlHits++
+      resolve(data)
+    }))
+
+    const pubResult = await withTimeout(
+      rpcEvent.publish({ event: 'ctrl-a', data: { from: 'rpc', n: 1 } }),
+      TEST_TIMEOUT,
+      'RPC publish'
+    )
+    const ctrlData = await withTimeout(ctrlP, TEST_TIMEOUT, 'ctrl-a delivered on SSE')
+    report('RPC: publish round-trips through the server and returns on SSE',
+      ctrlData && ctrlData.from === 'rpc' && ctrlData.n === 1,
+      JSON.stringify(ctrlData))
+    report('RPC: $publish returns the server-assigned sender id',
+      pubResult && pubResult.senderId === rpcEvent.clientId,
+      `senderId: ${pubResult?.senderId}`)
+
+    // Unsubscribing must stop delivery: the server drops the subscription and the
+    // client removes the transport listener, so nothing reaches the emitter.
+    await withTimeout(rpcEvent.unsubscribe('ctrl-a'), TEST_TIMEOUT, 'RPC unsubscribe')
+    const hitsBeforeUnsub = ctrlHits
+    await rpcEvent.publish({ event: 'ctrl-a', data: { from: 'rpc', n: 2 } })
+    await sleep(300)
+    report('RPC: unsubscribe stops delivery',
+      ctrlHits === hitsBeforeUnsub,
+      `ctrl-a delivered ${ctrlHits} time(s), was ${hitsBeforeUnsub} before unsubscribe`)
+
+    rpcEvent.close()
+    report('RPC: stream closed', !rpcEvent.active, '')
 
     // All done
     const passed = RESULTS.filter(r => r.passed).length

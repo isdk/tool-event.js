@@ -1,19 +1,31 @@
 /**
  * E2E test server for browser entry.
  *
- * Serves:
- * 1. Static files from dist/ (the built browser module)
- * 2. The test HTML page at /
- * 3. SSE endpoint at /api/event (uses SSEChannel from dist)
- * 4. POST /api/trigger to publish server events
+ * Serves TWO planes, on two ports:
  *
- * Note: Uses a simple in-process SSE implementation to avoid
- * dependencies on the built dist ESM chain for the server itself.
+ *   data plane  :3099  /api/event  /api/trigger  /api/echo  /api/raw  /api/disconnect
+ *                    A hand-rolled SSE channel, so the raw-stream behaviours
+ *                    (Last-Event-ID replay, forced disconnects, non-JSON frames)
+ *                    stay testable without depending on the built package.
+ *   control plane :3100 /api/rpc/  the documented flow — tool-rpc discovery,
+ *                    RPC calls, and EventServer's SSE stream served by
+ *                    SseServerPubSubTransport. This plane imports the BUILT
+ *                    package (`dist`), which is the point: a breaking change in
+ *                    the package's public API fails this example.
+ *
+ * The browser app reaches the control plane through Vite's dev-server proxy
+ * (`/api/rpc` -> :3100), so it stays same-origin and needs no CORS.
  */
 import http from 'node:http'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+
+// The control plane imports this package **by name** (Node's self-reference via
+// the `exports` map), which resolves to the built `dist` at runtime — the same
+// entry a real consumer gets, and what makes this example a regression guard.
+import { HttpServerToolTransport, ServerTools } from '@isdk/tool-rpc'
+import { EventServer, SseServerPubSubTransport, eventServer } from '@isdk/tool-event'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const projectRoot = path.resolve(__dirname, '../..')
@@ -313,10 +325,36 @@ const server = http.createServer((req, res) => {
   serveStatic(res, distPath)
 })
 
+// ── Control plane: tool-rpc + EventServer over the built package ───────
 // Port is overridable so the runner can avoid clashing with a previous run.
 const PORT = Number(process.env.SSE_PORT || 3099)
+const RPC_PORT = Number(process.env.RPC_PORT || PORT + 1)
+const RPC_API_ROOT = `http://localhost:${RPC_PORT}/api/rpc/`
+
+// The server side of the documented flow: an EventServer registered as a server
+// tool, with the SSE pubsub transport attached. `EventServer.list` is a stream
+// method, so GET /api/rpc/event is served as the client's EventSource stream.
+EventServer.setPubSubTransport(new SseServerPubSubTransport())
+eventServer.register()
+
+const rpc = new HttpServerToolTransport()
+rpc.addRpcHandler(RPC_API_ROOT)
+rpc.addDiscoveryHandler(RPC_API_ROOT, () => ServerTools.toJSON())
+
 server.listen(PORT, () => {
   console.log(`🚀 E2E test server running at http://localhost:${PORT}`)
   console.log(`   Test page: http://localhost:${PORT}/`)
   console.log(`   SSE endpoint: http://localhost:${PORT}/api/event`)
 })
+
+await rpc.start({ port: RPC_PORT })
+console.log(`🛰 RPC control plane at ${RPC_API_ROOT}`)
+console.log(`   discovery: GET  /api/rpc/   rpc: POST /api/rpc/<tool>`)
+console.log(`   event stream: GET /api/rpc/event`)
+
+function shutdown() {
+  rpc.stop(true).finally(() => process.exit(0))
+  setTimeout(() => process.exit(0), 2000).unref()
+}
+process.on('SIGINT', shutdown)
+process.on('SIGTERM', shutdown)

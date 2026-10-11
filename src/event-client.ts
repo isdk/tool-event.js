@@ -88,6 +88,10 @@ export class EventClient extends ResClientTools {
     const stream = this._stream = await (this.constructor as typeof EventClient).pubSubTransport.connect(this.name!, params)
     if (stream.clientId) {
       this.fetchOptions = defaultsDeep({clientId: stream.clientId}, this.fetchOptions)
+      // defaultsDeep keeps whatever id a previous session left behind. The stream owns
+      // the id, so the RPC header has to follow the live session, not the first one
+      // this client ever had.
+      this.fetchOptions.clientId = stream.clientId
     }
 
     this._streamEvents = eventList ?? Object.keys(this._desiredListeners)

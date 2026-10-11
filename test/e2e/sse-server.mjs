@@ -9,17 +9,29 @@
  * - POST /api/trigger     Publish event to all SSE clients
  * - POST /api/echo        Echo event back to SSE clients
  * - POST /api/disconnect  Drop all SSE connections (for reconnection tests)
+ * - POST /api/ctrl/publish Server-initiated publish through the real EventServer
  * - GET  /api/status      Server status
  * - POST /api/e2e-result  Log test result (debugging)
  * - Static files from dist/
  *
- * Note: Uses a simple in-process SSE implementation to avoid
- * dependencies on the built dist ESM chain for the server itself.
+ * The data plane above is a simple in-process SSE implementation: it broadcasts to
+ * every connection and has no notion of subscriptions, which is what the data-plane
+ * tests rely on. The control plane ($sub/$unsub/$publish, per-session subscriptions,
+ * targeted publish) is the real thing: an EventServer from the built package with the
+ * real SseServerPubSubTransport, served by tool-rpc on its own port (RPC_PORT,
+ * default SSE_PORT+1) at /api/rpc/ — discovery, RPC calls, and the client's SSE
+ * stream (GET /api/rpc/event) all from EventServer.list. The dev server proxies
+ * /api/rpc there so the page stays same-origin.
  */
 import http from 'node:http'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+
+// Self-reference through the package name: Node resolves it via the package's own
+// `exports`, which is the same entry a consumer would import.
+import { EventServer, SseServerPubSubTransport } from '@isdk/tool-event'
+import { ServerTools, HttpServerToolTransport } from '@isdk/tool-rpc'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const projectRoot = path.resolve(__dirname, '../..')
@@ -160,6 +172,23 @@ class SimpleSSEChannel {
 
 const channel = new SimpleSSEChannel()
 
+// ── Control plane: real EventServer + tool-rpc ───────────────────
+// Defined before the request handler so the control-plane routes below reference
+// initialized objects.
+//
+// `EventServer.list` is a stream method, so GET /api/rpc/event is served as the
+// client's EventSource stream and every $sub/$unsub/$publish is an RPC call.
+const ctrlTransport = new SseServerPubSubTransport()
+EventServer.setPubSubTransport(ctrlTransport)
+const ctrlEventServer = new EventServer('event')
+ctrlEventServer.register()
+
+// Track the control-plane sessions so the test server can drop them on demand
+// (`session.close()` ends the response, which is what triggers the client reconnect).
+const ctrlSessions = new Set()
+ctrlTransport.onConnection((s) => ctrlSessions.add(s))
+ctrlTransport.onDisconnect((s) => ctrlSessions.delete(s))
+
 // MIME types for static files
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -268,6 +297,48 @@ const server = http.createServer((req, res) => {
     return
   }
 
+  // Control-plane publish: POST /api/ctrl/publish?event=xxx[&clientId=yyy]
+  // Server-initiated publish through the real EventServer. With clientId it targets
+  // one session (the transport bypasses subscriptions for a target); without it the
+  // event goes to every session subscribed to it.
+  if (pathname === '/api/ctrl/publish' && req.method === 'POST') {
+    let body = ''
+    req.on('data', chunk => { body += chunk })
+    req.on('end', () => {
+      const eventName = url.searchParams.get('event') || 'ctrl'
+      const clientId = url.searchParams.get('clientId')
+      let data
+      try { data = JSON.parse(body) } catch { data = body || 'published' }
+      try {
+        // The static, not `ctrlEventServer.publish`: registration replaces the
+        // instance method with the RPC wrapper for `$publish`, which takes a params
+        // object and rejects a bare event name.
+        EventServer.publish(eventName, data, clientId ? { clientId } : undefined)
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ ok: true, event: eventName, clientId: clientId || null }))
+      } catch (err) {
+        // An unhandled throw here would take the whole test server down.
+        res.writeHead(400, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ ok: false, error: String(err?.message ?? err) }))
+      }
+    })
+    return
+  }
+
+  // Control-plane disconnect: POST /api/ctrl/disconnect
+  // Ends every control-plane SSE response. The EventSource treats a completed stream
+  // as a dropped connection and reconnects after the `retry:` interval, carrying
+  // Last-Event-ID — which is what the replay test needs.
+  if (pathname === '/api/ctrl/disconnect' && req.method === 'POST') {
+    const count = ctrlSessions.size
+    for (const session of [...ctrlSessions]) {
+      try { session.close() } catch { /* already gone */ }
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ ok: true, disconnected: count }))
+    return
+  }
+
   // Status endpoint: GET /api/status
   // Returns current server state for test assertions
   if (pathname === '/api/status' && req.method === 'GET') {
@@ -321,8 +392,26 @@ const server = http.createServer((req, res) => {
 
 // Port is overridable so the runner can avoid clashing with a previous run.
 const PORT = Number(process.env.SSE_PORT || 3099)
+const RPC_PORT = Number(process.env.RPC_PORT || PORT + 1)
+const RPC_API_ROOT = `http://localhost:${RPC_PORT}/api/rpc/`
+
+const rpc = new HttpServerToolTransport()
+rpc.addRpcHandler(RPC_API_ROOT)
+rpc.addDiscoveryHandler(RPC_API_ROOT, () => ServerTools.toJSON())
+
 server.listen(PORT, () => {
   console.log(`🚀 E2E test server running at http://localhost:${PORT}`)
   console.log(`   Test page: http://localhost:${PORT}/`)
   console.log(`   SSE endpoint: http://localhost:${PORT}/api/event`)
 })
+
+await rpc.start({ port: RPC_PORT })
+console.log(`🛰 RPC control plane at ${RPC_API_ROOT}`)
+console.log(`   discovery: GET  /api/rpc/   rpc: POST /api/rpc/<tool>`)
+console.log(`   event stream: GET /api/rpc/event`)
+
+function shutdown() {
+  rpc.stop(true).finally(() => process.exit(0))
+  setTimeout(() => process.exit(0), 2000).unref()
+}
+process.on('SIGINT', shutdown)

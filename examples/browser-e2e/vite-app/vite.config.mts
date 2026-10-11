@@ -51,8 +51,6 @@ export default defineConfig({
   resolve: {
     conditions: ['browser', 'import', 'module'],
     alias: {
-      // Force @isdk/tool-rpc to use its browser build to avoid the missing Funcs export issue
-      '@isdk/tool-rpc': path.resolve(packagesDir, 'tool-rpc/dist/browser.mjs'),
       // Force util-ex to use ESM source instead of CJS lib: custom-ability imports
       // from 'util-ex/lib/extend' and CJS -> ESM conversion loses the default export
       'util-ex/lib': path.resolve(utilExRoot, 'src'),
@@ -75,6 +73,15 @@ export default defineConfig({
     strictPort: true,
     fs: {
       allow: [packagesDir, utilExRoot, abstractErrorRoot],
+    },
+    // The RPC control plane runs on its own port (browser-e2e-server.mjs).
+    // tool-rpc's HTTP server sends no CORS headers, so the app reaches it
+    // through this proxy and stays same-origin with the page.
+    proxy: {
+      '/api/rpc': {
+        target: process.env.RPC_PROXY_TARGET || 'http://127.0.0.1:3100',
+        changeOrigin: true,
+      },
     },
   },
 })

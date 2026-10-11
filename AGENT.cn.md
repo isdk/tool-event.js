@@ -153,7 +153,7 @@ await eventClient.publish({ event: 'client-hello', data: { msg: '你好' } });
 | `init(events)` | 关闭并重新初始化带事件订阅的流。 |
 | `setActive(bool)` | 连接/断开传输流。 |
 | `close()` | 关闭传输流。 |
-| `get clientId` | 服务端为此客户端分配的 UUID。 |
+| `get clientId` | 当前会话由服务端分配的 UUID；重连接续后会跟随新会话。 |
 | `get active` | 传输流是否已打开。 |
 
 ### EventServer
@@ -209,6 +209,24 @@ eventBus.on('client:ui-click', (data, meta) => {
 ```typescript
 EventServer.publish('private-msg', { text: '你好' }, { clientId: 'xxx' });
 ```
+
+## SSE 会话身份（可注入策略）
+
+一次连接归属于哪个会话，由 `SSEIdentityPolicy`（`src/utils/sse-identity.ts`）决定，通过 `new SseServerPubSubTransport({ identity })` 或 `new SSEChannel({ identity })` 注入：
+
+```typescript
+interface SSEIdentityPolicy {
+  readonly name: string
+  resolve: (ctx: { req }) => string | undefined   // 有效凭证所续用的会话
+  issue: (ctx: { req }) => string                  // 新建连接的 id
+  credential?: (clientId: string) => string | undefined  // 随 `welcome` 下发
+  revoke?: (clientId: string) => void
+}
+```
+
+默认策略（`createSSEIdentity()`）签发带 TTL 与使用次数限制的服务端不透明 token，因此断开的连接能续用原会话 —— `clientId` 不变、订阅列表不变、从最后收到的事件 id 处重放（重放覆盖该 id 之后发布的全部消息，受通道 `historySize` 缓存限制，并按续用会话的订阅列表过滤，断开期间发布的消息也会送达）；服务端从未签发过的凭证不会匹配任何会话。客户端自带的 `clientId` 永不采用。外部认证协议通过替换该策略接入，`EventServer`/`EventClient` 无需修改。
+
+一个会话只有一条在任流：续用一个流仍在任的会话时会发生接管（被取代的流关闭），因此一次发布在每个 `clientId` 上只投递一次。续用行为由三个 `SSEChannel` 选项决定，通过 `new SseServerPubSubTransport({ channelOptions })` 传入：`resumeWindow`（限定续用；每次断开重新开启，`0` 关闭续用）、`maxStreamDuration`（服务端定时结束该流 —— 与其他断开无异，会开启续用窗口）、`historySize`（重放深度）。
 
 ## 自定义传输层接口
 

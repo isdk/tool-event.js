@@ -160,11 +160,14 @@ async function main() {
 
   // 3. Start Vite dev server
   console.log('Starting Vite dev server on port ' + VITE_PORT + '...')
+  // The dev server proxies /api/rpc to the RPC control plane, whose port derives
+  // from SSE_PORT, so the dev server needs the same value the SSE server got.
   const viteResult = await startProcess(
     'pnpm',
     ['exec', 'vite', appDir, '--config', viteConfigPath, '--port', String(VITE_PORT), '--strictPort'],
     projectRoot,
-    'Vite server'
+    'Vite server',
+    { SSE_PORT: String(SSE_PORT) }
   )
   await waitForPort('http://localhost:' + VITE_PORT + '/', START_TIMEOUT, 'Vite server', viteResult.proc)
   console.log('   Vite server ready\n')

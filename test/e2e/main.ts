@@ -32,6 +32,15 @@ import {
   SseClientPubSubTransport as PubSubSseClient,
 } from '@isdk/tool-event/transports/pubsub/browser'
 
+// The control plane of the documented flow lives in tool-rpc: discovery pulls the
+// server's tool list, and EventClient's subscribe/publish are RPC calls. The dev
+// server proxies /api/rpc to the RPC port (see vite.config.mts).
+import {
+  ClientTools,
+  HttpClientToolTransport,
+  RpcTransportManager,
+} from '@isdk/tool-rpc'
+
 // ── Test framework ──────────────────────────────────────────────
 const RESULTS: Array<{name: string; passed: boolean; detail: string}> = []
 const TEST_TIMEOUT = 8000
@@ -200,8 +209,9 @@ async function runTests() {
     setStatus('👤 Testing EventClient...')
     EventClient.setPubSubTransport(transport)
     const client = new EventClient('e2e-user')
-    // Wire EventClient's event handling directly to the SSE stream
-    // to avoid sending RPC calls that our test server doesn't support
+    // Wire EventClient's event handling directly to the SSE stream: this data-plane
+    // endpoint (/api/event) has no RPC counterpart, so `on`/`off` are patched. The
+    // RPC-backed path is exercised in section 19 against the control-plane port.
     const clientProxy = client as any
     clientProxy.on = (evt: string, handler: Function) => { stream.on(evt, handler as any); return clientProxy }
     clientProxy.off = (evt: string, handler: Function) => { stream.off(evt, handler as any); return clientProxy }
@@ -737,9 +747,10 @@ async function runTests() {
     )
 
     // 18d/18e. Dedup across *separate* subscribe calls, in both orders. The
-    // transport control calls (sub/unsub) are stubbed: the test server has no
-    // RPC endpoint, same as the EventClient test above. The dedup logic under
-    // test is EventClient's own listener bookkeeping.
+    // transport control calls (sub/unsub) are stubbed: the data-plane endpoint these
+    // tests use has no RPC counterpart (the control plane runs on its own port, see
+    // section 19). The dedup logic under test is EventClient's own listener
+    // bookkeeping.
     // The client's own listener bookkeeping is observed at the transport
     // boundary: after both subscriptions the stream must carry exactly one
     // installed listener for the event (the covering regex), and the event must
@@ -816,6 +827,204 @@ async function runTests() {
 
     regStream.close()
     report('P0 regressions: cleanup done', true, '')
+
+    // 19. Control plane over RPC: discovery -> EventClient over RPC -> SSE stream
+    //     served by EventServer.list -> $sub/$unsub/$publish against a real session.
+    //     The data-plane tests above talk to a hand-rolled SSE channel that broadcasts
+    //     to every connection; this section is the real control path the README
+    //     documents, and until now nothing in the browser suite exercised it.
+    setStatus('🛰 Testing RPC control plane...')
+    const RPC_ROOT = window.location.origin + '/api/rpc/'
+
+    RpcTransportManager.bindScheme('http', HttpClientToolTransport)
+    // `backendEventable` resolves the bus through the registry, so the event-bus tool
+    // has to be registered before it is used.
+    event.register()
+    backendEventable(EventClient)
+
+    // Register the client tool locally first: discovery merges the server's metadata
+    // into this instance, which is what keeps it an EventClient.
+    const rpcEvent = new EventClient('event')
+    rpcEvent.register()
+
+    ClientTools.apiUrl = RPC_ROOT
+    await withTimeout(ClientTools.loadFrom(), TEST_TIMEOUT, 'RPC discovery')
+    const discovered = ClientTools.get('event') as EventClient
+    report('RPC: discovery reached the server and merged the event tool',
+      discovered === rpcEvent, `apiUrl: ${RPC_ROOT}`)
+    report('RPC: discovery installed the control methods on the client',
+      typeof (rpcEvent as any).sub === 'function' &&
+      typeof (rpcEvent as any).unsub === 'function' &&
+      typeof (rpcEvent as any).publish === 'function',
+      'sub/unsub/publish')
+
+    // The transport picks up the static apiUrl when installed, so the EventSource URL
+    // the client builds is RPC_ROOT + 'event' — the stream EventServer.list serves.
+    EventClient.setPubSubTransport(new SseClientPubSubTransport())
+
+    await withTimeout(rpcEvent.init(['ctrl-a']), TEST_TIMEOUT, 'EventClient.init over RPC')
+    report('RPC: EventClient opened its SSE stream on the RPC endpoint',
+      !!rpcEvent.clientId && rpcEvent.active, `clientId: ${rpcEvent.clientId}`)
+
+    // $sub against a live session: the server reports the per-session subscription and
+    // the clientId *it* assigned. A client-supplied clientId in the payload must not
+    // become the identity the server records.
+    const forged = 'forged-' + Math.random().toString(36).slice(2, 8)
+    const subResult: any = await withTimeout(
+      (rpcEvent as any).sub({ event: 'ctrl-a', clientId: forged }),
+      TEST_TIMEOUT, '$sub')
+    report('RPC: $sub reports the session subscription',
+      subResult?.forward === true && subResult?.subscribed === true,
+      JSON.stringify(subResult))
+    report('RPC: the server ignores a client-supplied clientId',
+      subResult?.clientId === rpcEvent.clientId && subResult?.clientId !== forged,
+      `server ${subResult?.clientId} vs forged ${forged}`)
+
+    let ctrlHits = 0
+    const ctrlP = new Promise<any>(resolve => rpcEvent.on('ctrl-a', (name: string, data: any) => {
+      ctrlHits++
+      resolve(data)
+    }))
+    const pubResult: any = await withTimeout(
+      rpcEvent.publish({ event: 'ctrl-a', data: { from: 'rpc', n: 1 } }),
+      TEST_TIMEOUT, 'RPC publish')
+    const ctrlData = await withTimeout(ctrlP, TEST_TIMEOUT, 'ctrl-a delivered on SSE')
+    report('RPC: publish round-trips through the server and returns on SSE',
+      ctrlData && ctrlData.from === 'rpc' && ctrlData.n === 1, JSON.stringify(ctrlData))
+    report('RPC: $publish returns the server-assigned sender id, not the forged one',
+      pubResult?.senderId === rpcEvent.clientId && pubResult?.senderId !== forged,
+      `senderId: ${pubResult?.senderId}`)
+
+    // Unsubscribing must stop delivery: the server drops the session subscription and
+    // the client removes the transport listener.
+    await withTimeout(rpcEvent.unsubscribe('ctrl-a'), TEST_TIMEOUT, 'RPC unsubscribe')
+    const hitsBeforeUnsub = ctrlHits
+    await rpcEvent.publish({ event: 'ctrl-a', data: { from: 'rpc', n: 2 } })
+    await sleep(300)
+    report('RPC: unsubscribe stops delivery',
+      ctrlHits === hitsBeforeUnsub,
+      `ctrl-a delivered ${ctrlHits} time(s), was ${hitsBeforeUnsub} before unsubscribe`)
+
+    // Per-session subscriptions: a stream that subscribed to 'ctrl-sub' receives that
+    // event and not 'ctrl-other'. This is the server-side subscription filter, not the
+    // client's listener bookkeeping.
+    const subStream = await withTimeout(
+      (async () => {
+        const t = new SseClientPubSubTransport()
+        t.setApiRoot(RPC_ROOT)
+        return await t.connect('event', { event: ['ctrl-sub'] })
+      })(),
+      TEST_TIMEOUT, 'subscribed stream')
+    const subHits: string[] = []
+    subStream.on('ctrl-sub', () => subHits.push('ctrl-sub'))
+    subStream.on('ctrl-other', () => subHits.push('ctrl-other'))
+    await fetch(SSE_URL + '/api/ctrl/publish?event=ctrl-sub', { method: 'POST', body: JSON.stringify({ n: 1 }) })
+    await fetch(SSE_URL + '/api/ctrl/publish?event=ctrl-other', { method: 'POST', body: JSON.stringify({ n: 1 }) })
+    await waitForSettled(() => subHits.length >= 1, { settle: 300, label: 'subscribed event delivered' })
+    report('RPC: a session receives only the events it subscribed to',
+      subHits.length === 1 && subHits[0] === 'ctrl-sub',
+      'received: ' + subHits.join(','))
+
+    // Targeted publish: with a target clientId the transport delivers to that session
+    // alone. The broadcast that follows is the positive control — the second stream
+    // does receive the same event when nothing targets it, so the 0 above is about
+    // targeting, not about a listener that never fires.
+    const plainStream = await withTimeout(
+      (async () => {
+        const t = new SseClientPubSubTransport()
+        t.setApiRoot(RPC_ROOT)
+        return await t.connect('event')
+      })(),
+      TEST_TIMEOUT, 'plain stream')
+    // Both streams listen to the same event name; only deliveries carrying this
+    // marker are counted, so the subscription test above does not leak into these.
+    const targetHits: number[] = []
+    const otherHits: number[] = []
+    plainStream.on('ctrl-sub', (d: any) => { if (d?.t === 'tgt') targetHits.push(d.n) })
+    subStream.on('ctrl-sub', (d: any) => { if (d?.t === 'tgt') otherHits.push(d.n) })
+    await fetch(SSE_URL + `/api/ctrl/publish?event=ctrl-sub&clientId=${plainStream.clientId}`,
+      { method: 'POST', body: JSON.stringify({ t: 'tgt', n: 1 }) })
+    await waitForSettled(() => targetHits.length >= 1, { settle: 300, label: 'targeted publish reaches the target' })
+    report('RPC: publish with a target clientId reaches only that session',
+      targetHits.length === 1 && otherHits.length === 0,
+      `target=${targetHits.length} other=${otherHits.length}`)
+    // Positive control: the same event untargeted. The plain stream has no
+    // subscription list (the transport delivers everything to an unsubscribed
+    // session) and the other one subscribed to exactly this name, so both must
+    // receive it — the 0 above is about targeting, not about a dead listener.
+    await fetch(SSE_URL + '/api/ctrl/publish?event=ctrl-sub', { method: 'POST', body: JSON.stringify({ t: 'tgt', n: 2 }) })
+    await waitForSettled(() => otherHits.length >= 1, { settle: 300, label: 'untargeted publish reaches the other session' })
+    report('RPC: publish without a target reaches every session subscribed to it',
+      targetHits.length === 2 && otherHits.length === 1,
+      `target=${targetHits.length} other=${otherHits.length}`)
+
+    subStream.close()
+    plainStream.close()
+
+    // Degraded path: with no stream there is no session, so $sub/$unsub fall back to
+    // class-level forwarding and report no per-session fields.
+    rpcEvent.close()
+    const degraded: any = await withTimeout((rpcEvent as any).sub({ event: 'ctrl-degraded' }), TEST_TIMEOUT, '$sub with no session')
+    report('RPC: $sub without a session degrades to class-level forwarding',
+      degraded?.forward === true && degraded?.subscribed === undefined && degraded?.event === 'ctrl-degraded',
+      JSON.stringify(degraded))
+
+    report('RPC: stream closed', !rpcEvent.active, '')
+
+    // 20. Control-plane stream resilience: the server ends the response, the
+    //     EventSource reconnects after the `retry:` interval carrying Last-Event-ID,
+    //     and the channel replays what was published during the outage.
+    //     The data-plane suite has reconnection coverage against its hand-rolled
+    //     channel; the real SSEChannel behind the RPC endpoint had none.
+    setStatus('🔌 Testing control-plane reconnect...')
+    const rcTransport = new SseClientPubSubTransport()
+    rcTransport.setApiRoot(RPC_ROOT)
+    const rcStream = await withTimeout(
+      rcTransport.connect('event', { event: ['ctrl-rc'] }),
+      TEST_TIMEOUT, 'reconnect stream')
+    const rcIds: string[] = []
+    const rcHits: number[] = []
+    // The id the stream was opened with. `stream.clientId` must follow the server-assigned
+    // id of whichever connection is live, so `$sub`/`$publish` target the right session.
+    const firstStreamId = rcStream.clientId
+    // Registered after connect resolved, so this listener only ever sees the welcome
+    // the *reconnected* connection carries — the first one was consumed by the
+    // transport's own handshake.
+    rcStream.on('welcome', (d: any) => { if (d?.clientId) rcIds.push(d.clientId) })
+    rcStream.on('ctrl-rc', (d: any) => { if (d?.t === 'rc') rcHits.push(d.n) })
+
+    await fetch(SSE_URL + '/api/ctrl/publish?event=ctrl-rc', { method: 'POST', body: JSON.stringify({ t: 'rc', n: 0 }) })
+    await waitForSettled(() => rcHits.length >= 1, { settle: 250, label: 'event delivered before the drop' })
+    report('Reconnect: control-plane stream delivers before the drop',
+      rcHits.length === 1 && rcIds.length === 0,
+      `delivered=${rcHits.join(',')} welcomes=${rcIds.length}`)
+
+    const dropRes = await fetch(SSE_URL + '/api/ctrl/disconnect', { method: 'POST' })
+    const dropInfo: any = await dropRes.json()
+    // Published while the stream is down: these can only arrive through replay.
+    for (const n of [1, 2, 3]) {
+      await fetch(SSE_URL + '/api/ctrl/publish?event=ctrl-rc', { method: 'POST', body: JSON.stringify({ t: 'rc', n }) })
+    }
+    await waitForSettled(() => rcHits.length >= 4, { settle: 500, label: 'replayed events delivered after reconnect' })
+    report('Reconnect: the stream reconnects and replays the events published during the outage',
+      rcHits.length === 4 && rcHits.join(',') === '0,1,2,3',
+      `dropped=${dropInfo.disconnected} delivered=${rcHits.join(',')}`)
+    // The server issued a resume credential in the welcome frame, so the dropped
+    // connection resumes the session it had: same server-assigned id, same subscriptions.
+    report('Reconnect: the drop resumes the same server-assigned session',
+      rcIds.length === 1 && rcIds[0] === firstStreamId && rcStream.clientId === firstStreamId,
+      `resumed ${rcIds[0]} (first ${firstStreamId}, stream now ${rcStream.clientId})`)
+
+    // Live delivery resumes on the subscription the reconnect re-established (the
+    // stream URL carries its event list, so EventServer.list re-subscribes it).
+    await fetch(SSE_URL + '/api/ctrl/publish?event=ctrl-rc', { method: 'POST', body: JSON.stringify({ t: 'rc', n: 4 }) })
+    await waitForSettled(() => rcHits.length >= 5, { settle: 300, label: 'live delivery after reconnect' })
+    report('Reconnect: live delivery resumes on the re-established subscription',
+      rcHits.length === 5 && rcHits[4] === 4,
+      `delivered=${rcHits.join(',')}`)
+
+    rcStream.close()
+    report('Reconnect: stream closed after recovery', rcStream.readyState === 2, `readyState=${rcStream.readyState}`)
 
     // All done
     const passed = RESULTS.filter(r => r.passed).length

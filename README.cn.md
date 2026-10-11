@@ -6,20 +6,26 @@
 
 简而言之，`@isdk/tool-event` 让您用统一、简单的方式处理所有的事件，无论是远程服务上的事件，还是本地事件。
 
-本项目基于 `@isdk/tool-func` 和 `@isdk/tool-rpc` 构建。在继续之前，请确保您已熟悉它们的核心概念。
+本项目基于 [`@isdk/tool-func`](https://github.com/isdk/tool-func.js) 和 [`@isdk/tool-rpc`](https://github.com/isdk/tool-rpc.js) 构建。在继续之前，请确保您已熟悉它们的核心概念——各包的使用手册由其自身仓库维护，这里是唯一权威副本（本项目刻意不保留本地副本，以免副本在本地悄悄过时）：
+
+- [`@isdk/tool-func` — AGENT.md](https://github.com/isdk/tool-func.js/blob/main/AGENT.md)（[速览版](https://github.com/isdk/tool-func.js/blob/main/AGENT.Quick.md)）
+- [`@isdk/tool-rpc` — AGENT.md](https://github.com/isdk/tool-rpc.js/blob/main/AGENT.md)
 
 ## 🧪 测试
 
 项目包含单元测试和基于浏览器的 E2E 测试。
 
 ```bash
-# 单元测试 (vitest, 94 个)
+# 单元测试 (vitest, 101 个)
 pnpm test
 
-# 浏览器 E2E 测试 (Playwright, Chromium, 59 个)
+# 浏览器 E2E 测试 (Playwright, Chromium, 77 个)
+# 该套件同时覆盖数据面与 RPC 控制面：测试服务器在第二个端口上运行真实的
+# EventServer（/api/rpc/，由 Vite 代理），浏览器因此可以真实地跑通发现、
+# $sub/$unsub/$publish、定向推送，以及带 Last-Event-ID 重放的重连。
 pnpm test:e2e
 
-# 浏览器示例应用 (examples/browser-e2e，47 项检查)
+# 浏览器示例应用 (examples/browser-e2e，53 项检查)
 pnpm test:examples
 
 # 单元测试重复 3 轮（vitest --repeats）—— 抖动检查（CI 会跑这一项）
@@ -196,6 +202,8 @@ graph TD
 
 - **获取事件流**：当客户端第一次需要订阅事件时，`EventClient` 会向 `GET /api/event` (这是 `EventServer` 的 `list` 方法) 发起请求。这个请求的响应就是一个 `text/event-stream` 类型的持久流。服务端会分配一个唯一的 UUID 作为 `clientId`，并通过 `welcome` 事件发送给客户端。从概念上讲，这等同于"获取"一个代表实时事件流的资源。
 
+- **会话身份与重连接续**：`welcome` 事件除了携带服务端分配的 `clientId`，还携带一个重连凭证（`sessionToken`）。一次连接归属于哪个会话，由可注入的策略（`SSEIdentityPolicy`）决定，默认实现是服务端签发的不透明 token —— 因此客户端无法自选其 `$sub`/`$publish` 所匹配的 id。连接断开后，客户端带着该凭证重新打开流，续用同一个会话：`clientId` 不变、订阅列表不变，并从它最后收到的事件处重放。重放覆盖从客户端最后确认的事件 id 之后发布的全部消息（在通道历史缓存 `historySize` 范围内，并按续用会话的订阅列表过滤）—— 因此连接断开期间发布的消息也会送达。认证留在事件协议之外 —— 外部认证协议是替换该策略，而不是扩展它。
+
 - **管理事件流**：后续的 `subscribe` 和 `publish` 操作可以被看作是对这个"资源"状态的修改，它们通过独立的、常规的 RPC 请求来完成。
 
 这种设计将复杂的实时连接管理简化为开发者已经非常熟悉的、清晰的 REST/RPC 模型。
@@ -371,6 +379,38 @@ await eventClient.setActive(false); // 断开
 // 关闭连接
 eventClient.close();
 ```
+
+### 6.1 会话身份与断线续用
+
+SSE 流是一个**会话**。服务端在 `welcome` 事件中分配它的 `clientId`，每一次 `$sub`/`$publish` 都是针对该会话进行匹配 —— 而不是针对客户端自己放在参数里的 id。
+
+```typescript
+// id 由服务端分配，客户端只能读取，不能自选
+await eventClient.setActive(true);
+console.log(eventClient.clientId); // 服务端分配，且会跟随会话
+
+// 流断开后，客户端会带着 `welcome` 下发的重连凭证（`sessionToken`）重新打开流，
+// 因此会话能跨过这次中断：clientId 不变、订阅列表不变（包括流建立之后通过 RPC
+// 新增的订阅），并补发客户端尚未确认的消息。
+```
+
+一次连接请求归属于哪个会话，由可注入的策略（`SSEIdentityPolicy`）决定：`resolve`（凭证 → 会话）、`issue`（为新连接分配 id）、`credential`（`welcome` 下发什么）、`revoke`（会话销毁时）。默认实现签发服务端不透明 token，带 TTL 与使用次数限制；外部认证协议通过替换该策略接入，而不是扩展事件协议。
+
+```typescript
+EventServer.setPubSubTransport(new SseServerPubSubTransport({
+  identity: myIdentityPolicy, // 例如校验由您的认证服务签发的签名 token
+}));
+```
+
+重放覆盖从客户端最后确认的事件 id 之后发布的全部消息（在通道历史缓存 `historySize` 范围内，并按续用会话的订阅列表过滤）—— 连接断开期间发布的消息也会送达。
+
+一个会话只有**一条在任流**：第二个携带凭证的连接会接管该会话（被取代的流会关闭），因此一次发布在每个 `clientId` 上只投递一次。三个通道选项决定了续用的行为，通过 `new SseServerPubSubTransport({ channelOptions })` 传入：
+
+| 选项 | 作用 |
+|---|---|
+| `resumeWindow`（30s） | 会话断开后可以用原有订阅列表续用的时长。每次断开都会重新开启这个窗口，因此不断掉线的会话始终可续用；设为 `0` 则每次重连都会开一个新会话。 |
+| `maxStreamDuration`（30s） | 服务端定时结束该流。这与其他断开没有区别：它开启续用窗口，客户端续用同一个会话且无需感知。设为 `0` 关闭该限制。 |
+| `historySize`（100） | 重连可重放的历史深度。 |
 
 ### 7. 实现并使用可插拔传输层
 
