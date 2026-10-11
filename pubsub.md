@@ -198,6 +198,29 @@ async function main() {
 }
 ```
 
+> **ℹ️ The SSE client uses [`eventsource`](https://github.com/EventSource/eventsource), declared as a
+> peer dependency of this package.** That implementation is environment-agnostic
+> (it is built on `fetch` + `eventsource-parser`, with no Node.js-only APIs), which has three
+> consequences worth knowing:
+>
+> - **Nothing is installed on `globalThis.EventSource`.** The transport imports the class directly, so
+>   the browser and Node.js paths run the identical implementation — no polyfill step, no global to
+>   save or restore.
+> - **Package managers install peer dependencies for you**, but if your setup strips them (some
+>   monorepo/packaging setups do), add it explicitly: `npm install eventsource`.
+> - **Regex subscriptions depend on it.** Matching happens in the transport, inside the JS-visible
+>   `dispatchEvent`. A browser's built-in `EventSource` dispatches messages internally and would never
+>   reach that hook, which is why the built-in one is never used here.
+>
+> If you need to open a stream yourself, the same class is re-exported as `EventSource` from both the
+> Node and the browser entry points:
+>
+> ```typescript
+> import { EventSource } from '@isdk/tool-event'; // or '@isdk/tool-event/browser'
+> const es = new EventSource('http://localhost:3000/api/event');
+> es.addEventListener('my.event', (event) => console.log(event.data));
+> ```
+
 ## Example: Electron IPC for Real-time Desktop Apps
 
 For desktop applications built with Electron, the event system can operate over the built-in Inter-Process Communication (IPC) channels. This provides a highly efficient, real-time backend within your application shell without needing an HTTP server.
@@ -540,6 +563,50 @@ function onSettingsSave(newSettings: any) {
 }
 ```
 
+### Pattern (Regex) Subscriptions
+
+Every subscription API accepts patterns as well as plain event names, so one
+subscription can cover a whole family of events. Patterns work identically on
+the server (`forward` / `unforward`) and on the client (`subscribe` /
+`unsubscribe`, `on` / `off`, `forwardEvent` / `unforwardEvent`).
+
+```typescript
+// String-form regex — the same `/source/flags` syntax events-ex uses.
+eventServer.forward(['/^user-.*/', '/^log-(error|warning)$/i'])
+
+// A RegExp object is accepted too.
+eventServer.forward([/^order-/])
+
+await eventClient.subscribe(['/^user-.*/'])
+eventClient.on('/^user-.*/', (name: string, data: any) => console.log(name, data))
+eventClient.forwardEvent(['/^user-settings-.*/'])
+```
+
+**What counts as a pattern.** A string is treated as a regex only when it starts
+with `/`, ends with `/` (plus optional flags), and has a non-empty source — so
+`'/[/'` and `'//'` stay plain event names. A string and the regex built from the
+same source are one subscription: they share a key and deduplicate against each
+other.
+
+**Flags.** `i`, `m`, `s`, `u` and `d` are honored. `g` and `y` are dropped for
+matching, because `RegExp.prototype.test` advances `lastIndex` under those flags
+and a subscription would then skip every other event.
+
+**Delivery is deduplicated.** When an exact name and a regex covering it are both
+subscribed, the event is delivered **once** — on the server (one publish to the
+transport) and on the client (one listener call) — regardless of which was
+subscribed first. Unsubscribing the covering regex restores the exact
+subscription automatically.
+
+**Forwarding is per class.** `forward()` registers on the class you call it on, so
+a subclass (`class MyServer extends EventServer`) keeps its own forward registry
+and never cancels `EventServer`'s subscriptions, or vice versa.
+
+**Transport support.** Regex subscriptions need the client stream to implement
+`addRegExEventListener`. The built-in SSE transport does. A custom transport that
+omits it logs a warning naming the event and the transport protocol, and the
+subscription is skipped rather than silently dropped.
+
 This transport-agnostic architecture provides a clean, powerful, and decoupled way to build real-time, interactive applications. By separating the event logic from the communication protocol, you can choose the best transport for your needs while maintaining a consistent, unified event model.
 
 ---
@@ -655,6 +722,34 @@ export interface IPubSubClientTransport {
   setApiRoot?: (apiRoot: string) => void;
 }
 ```
+
+The stream returned by `connect` must implement `on`/`off` for exact event names, and — if it wants to support [pattern subscriptions](#pattern-regex-subscriptions) — the optional regex pair:
+
+```typescript
+interface PubSubClientStream {
+  // ...on / off / close
+
+  /** Registers a listener for a RegExp or string-form regex ('/^user-.*/').
+   *  Optional: EventClient warns once per pattern when a regex subscription is
+   *  made on a stream that does not implement this. */
+  addRegExEventListener?: (
+    pattern: string | RegExp,
+    listener: (data: any, ctx?: PubSubCtx) => void
+  ) => void;
+
+  /** Removes a listener registered with `addRegExEventListener`, keyed by the
+   *  same pattern (its source text) and the same listener function. */
+  removeRegExEventListener?: (
+    pattern: string | RegExp,
+    listener: (data: any, ctx?: PubSubCtx) => void
+  ) => void;
+}
+```
+
+Implementations should match with `pattern.test(eventName)` on a pattern whose `g`
+and `y` flags have been stripped (see `toEventMatcher` in `src/utils/event-pattern.ts`),
+so a global-flag pattern still fires for every matching event, and should guard
+their listener calls so a throwing listener cannot tear down the connection.
 
 The `EventClient` automatically handles the `apiRoot` configuration, making the system easy to use. The `connect` method is the most critical part, as it decouples the `EventClient` from the specifics of how a connection is made.
 

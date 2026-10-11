@@ -1,4 +1,4 @@
-import { EventName, EventBusName } from './utils';
+import { EventName, EventBusName, eventPatternKey, toEventMatcher } from './utils';
 import { event } from './event'
 import { type ServerFuncParams, type ToolRpcContext } from '@isdk/tool-rpc';
 import type { Event } from 'events-ex';
@@ -8,6 +8,21 @@ import type { IPubSubServerTransport } from './transports/pubsub/server';
 
 // the singleton instance of event-bus
 const eventBus = event.runSync()
+
+/** What one EventServer class has asked to forward, and what is installed. */
+type ForwardState = {
+  desiredExact: Set<string>
+  desiredRegexes: Map<string, RegExp>
+  activeExact: Set<string>
+  activeRegexes: Map<string, RegExp>
+  boundListener?: (this: Event, ...data: any[]) => any
+}
+
+// One registry per class. `forward()` installs the event-bus listener on
+// `this.constructor`, so the bookkeeping has to be per class as well: static
+// fields declared on `EventServer` are inherited by every subclass, which let
+// one instance's `unforward()` unregister the events another instance forwards.
+const forwardStates = new WeakMap<object, ForwardState>()
 
 export const ClientEventPrefix = 'client:'
 
@@ -27,7 +42,27 @@ export class EventServer extends ResServerTools {
    */
   public static autoInjectToLocalBus = false;
 
-  private static _boundEbListener?: (this: Event, ...data: any[]) => any;
+  /** The forwarding registry of *this* class (subclasses get their own). */
+  private static _forwardState(): ForwardState {
+    const ctor = this as unknown as object
+    let state = forwardStates.get(ctor)
+    if (!state) {
+      state = {
+        desiredExact: new Set<string>(),
+        desiredRegexes: new Map<string, RegExp>(),
+        activeExact: new Set<string>(),
+        activeRegexes: new Map<string, RegExp>(),
+      }
+      forwardStates.set(ctor, state)
+    }
+    return state
+  }
+
+  /** The event-bus listener this class forwards with. Kept as a name alias for
+   *  the per-class forward state. */
+  static get _boundEbListener() {
+    return this._forwardState().boundListener
+  }
 
   static _pubSubTransport: IPubSubServerTransport | undefined
   static setPubSubTransport(t?: IPubSubServerTransport) { this._pubSubTransport = t }
@@ -59,11 +94,68 @@ export class EventServer extends ResServerTools {
     this.pubSubTransport?.publish(eventType, data)
   }
 
-  static alreadyForward(event: string) {
-    const listeners = eventBus.listeners(event)
-    for (const listener of listeners) {
-      if (listener === this._boundEbListener) { return true }
+  static _patternKey(event: string | RegExp): string {
+    return eventPatternKey(event)
+  }
+
+  static _normalizePattern(event: string | RegExp): string | RegExp {
+    return toEventMatcher(event)
+  }
+
+  static _isCoveredByDesiredRegex(eventName: string, state: ForwardState): boolean {
+    for (const regex of state.desiredRegexes.values()) {
+      if (regex.test(eventName)) return true
     }
+    return false
+  }
+
+  static _syncForwards() {
+    const state = this._forwardState()
+    const listener = state.boundListener
+    if (!listener) return
+
+    for (const key of [...state.activeRegexes.keys()]) {
+      if (!state.desiredRegexes.has(key)) {
+        const regex = state.activeRegexes.get(key)
+        if (regex) eventBus.off(regex, listener)
+        state.activeRegexes.delete(key)
+      }
+    }
+
+    // Drop patterns this class no longer wants to forward, and the exact names a
+    // regex it forwards already covers — leaving both installed publishes the
+    // event twice, so the coverage check runs on every sync, not only when the
+    // exact name is first added.
+    for (const key of [...state.activeExact]) {
+      if (!state.desiredExact.has(key) || this._isCoveredByDesiredRegex(key, state)) {
+        eventBus.off(key, listener)
+        state.activeExact.delete(key)
+      }
+    }
+
+    for (const [key, regex] of state.desiredRegexes) {
+      if (!state.activeRegexes.has(key)) {
+        eventBus.on(regex, listener)
+        state.activeRegexes.set(key, regex)
+      }
+    }
+
+    for (const key of state.desiredExact) {
+      if (!state.activeExact.has(key) && !this._isCoveredByDesiredRegex(key, state)) {
+        eventBus.on(key, listener)
+        state.activeExact.add(key)
+      }
+    }
+  }
+
+  static alreadyForward(event: string | RegExp) {
+    const state = this._forwardState()
+    const key = EventServer._patternKey(event)
+    const pattern = EventServer._normalizePattern(event)
+    if (pattern instanceof RegExp) {
+      return state.desiredRegexes.has(key)
+    }
+    return state.desiredExact.has(key) || this._isCoveredByDesiredRegex(key, state)
   }
 
   publishServerEvent(event: string, data: any) {
@@ -71,33 +163,44 @@ export class EventServer extends ResServerTools {
   }
 
   // forward the events on the server event-bus to client
-  forward(events: string|string[]) {
-    if (!Array.isArray(events)) {
-      events = [events]
-    }
+  forward(events: string | RegExp | string[]) {
+    const list = Array.isArray(events) ? events : [events]
     const ctor = this.constructor as typeof EventServer
-    if (!ctor._boundEbListener) {
-      ctor._boundEbListener = function _ebListener(this: Event, ...data: any[]) {
+    const state = ctor._forwardState()
+    if (!state.boundListener) {
+      state.boundListener = function _ebListener(this: Event, ...data: any[]) {
         return ctor.ebListener(this.type!, ...data)
       }
     }
-    for (const event of events) {
-      if (!EventServer.alreadyForward(event)) {
-        eventBus.on(event, ctor._boundEbListener)
+    for (const event of list) {
+      const key = EventServer._patternKey(event)
+      const pattern = EventServer._normalizePattern(event)
+      if (pattern instanceof RegExp) {
+        state.desiredRegexes.set(key, pattern)
+      } else {
+        state.desiredExact.add(key)
       }
     }
+    // Sync on the class the listener was installed on. Syncing on the base class
+    // finds no listener there and registers nothing, which made `forward()` a
+    // silent no-op for every subclass.
+    ctor._syncForwards()
   }
 
-  unforward(events: string|string[]) {
-    if (typeof events === 'string') {
-      events = [events]
-    }
+  unforward(events: string | RegExp | string[]) {
+    const list = Array.isArray(events) ? events : [events]
     const ctor = this.constructor as typeof EventServer
-    if (ctor._boundEbListener) {
-      for (const event of events) {
-        eventBus.off(event, ctor._boundEbListener)
+    const state = ctor._forwardState()
+    for (const event of list) {
+      const key = EventServer._patternKey(event)
+      const pattern = EventServer._normalizePattern(event)
+      if (pattern instanceof RegExp) {
+        state.desiredRegexes.delete(key)
+      } else {
+        state.desiredExact.delete(key)
       }
     }
+    ctor._syncForwards()
   }
 
   list(params: EventServerFuncParams, context?: ToolRpcContext) {

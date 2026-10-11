@@ -10,7 +10,9 @@
  * - Event bus singleton and utilities
  * - EventClient (PubSub/SSE client for browser)
  * - Abstract EventServer class (framework-agnostic, transport-agnostic)
- * - SSE client transport (uses native EventSource API)
+ * - SSE client transport (uses the `eventsource` peer dependency)
+ * - `EventSource` from the `eventsource` peer dependency (required for regex
+ *   subscriptions — a built-in `EventSource` never reaches `dispatchEvent`)
  * - PubSub type definitions
  */
 
@@ -46,8 +48,23 @@ export type {
   PubSubClientId,
 } from './transports/pubsub';
 
-// SSE client transport (uses native browser EventSource API)
+// SSE client transport (uses the `eventsource` peer dependency)
 export { SseClientPubSubTransport } from './transports/pubsub/sse-client';
+
+// The `EventSource` the transport uses (the `eventsource` peer dependency —
+// environment-agnostic, so no global install). Re-exported from the browser
+// barrel, not from the Node one, which would pull `http` into this bundle.
+export { EventSource } from './transports/pubsub/browser';
 
 // URL params utility
 export { genUrlParamsStr } from './transports/pubsub/gen-url-params';
+
+// Event pattern utilities (browser-safe)
+export {
+  normalizeEventPattern,
+  toEventMatcher,
+  eventPatternKey,
+} from './utils/event-pattern';
+
+// SSE payload decoding (browser-safe)
+export { parseEventData } from './utils/sse-payload';

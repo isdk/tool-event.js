@@ -1,11 +1,17 @@
 /**
- * E2E test server for browser entry.
+ * E2E SSE test server.
  *
- * Serves:
- * 1. Static files from dist/ (the built browser module)
- * 2. The test HTML page at /
- * 3. SSE endpoint at /api/event (uses SSEChannel from dist)
- * 4. POST /api/trigger to publish server events
+ * Provides SSE and API endpoints for browser E2E tests.
+ * The Vite dev server (started by run-e2e.mjs) serves the test page.
+ *
+ * Endpoints:
+ * - GET  /api/event       SSE event stream
+ * - POST /api/trigger     Publish event to all SSE clients
+ * - POST /api/echo        Echo event back to SSE clients
+ * - POST /api/disconnect  Drop all SSE connections (for reconnection tests)
+ * - GET  /api/status      Server status
+ * - POST /api/e2e-result  Log test result (debugging)
+ * - Static files from dist/
  *
  * Note: Uses a simple in-process SSE implementation to avoid
  * dependencies on the built dist ESM chain for the server itself.
@@ -77,6 +83,32 @@ class SimpleSSEChannel {
     output += `data: ${dataStr}\n\n`
 
     // Store in history
+    this._history.push({ id, raw: output })
+    if (this._history.length > this._maxHistory) {
+      this._history.shift()
+    }
+
+    for (const client of this._clients.values()) {
+      try {
+        client.res.write(output)
+      } catch { /* ignore write errors */ }
+    }
+    return id
+  }
+
+  /**
+   * Publish a frame whose `data:` payload is deliberately NOT JSON.
+   *
+   * Regression fixture: the client transport must decode it without throwing,
+   * because an exception inside the dispatch hook used to tear down the whole
+   * stream and drop every later event.
+   */
+  publishRaw(rawData, eventName) {
+    const id = this._nextId++
+    let output = `id: ${id}\n`
+    if (eventName) output += `event: ${eventName}\n`
+    output += `data: ${rawData}\n\n`
+
     this._history.push({ id, raw: output })
     if (this._history.length > this._maxHistory) {
       this._history.shift()
@@ -213,6 +245,20 @@ const server = http.createServer((req, res) => {
     return
   }
 
+  // Raw endpoint: POST /api/raw?event=xxx
+  // Broadcasts a frame whose data payload is the request body verbatim (not JSON)
+  if (pathname === '/api/raw' && req.method === 'POST') {
+    let body = ''
+    req.on('data', chunk => { body += chunk })
+    req.on('end', () => {
+      const eventName = url.searchParams.get('event') || 'raw'
+      channel.publishRaw(body || 'plain-text-payload', eventName)
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ ok: true, event: eventName, clients: channel.connectedCount }))
+    })
+    return
+  }
+
   // Disconnect endpoint: POST /api/disconnect
   // Drops all SSE connections for error recovery testing
   if (pathname === '/api/disconnect' && req.method === 'POST') {
@@ -250,10 +296,10 @@ const server = http.createServer((req, res) => {
     return
   }
 
-  // Serve the test HTML page
+  // Health check / root endpoint (for E2E runner's waitForPort)
   if (pathname === '/' || pathname === '/index.html') {
-    const htmlPath = path.resolve(__dirname, 'browser-e2e.html')
-    serveStatic(res, htmlPath)
+    res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' })
+    res.end('SSE Server Running')
     return
   }
 
@@ -273,7 +319,8 @@ const server = http.createServer((req, res) => {
   serveStatic(res, distPath)
 })
 
-const PORT = 3099
+// Port is overridable so the runner can avoid clashing with a previous run.
+const PORT = Number(process.env.SSE_PORT || 3099)
 server.listen(PORT, () => {
   console.log(`🚀 E2E test server running at http://localhost:${PORT}`)
   console.log(`   Test page: http://localhost:${PORT}/`)

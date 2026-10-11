@@ -1,6 +1,7 @@
 import { IncomingMessage, ServerResponse } from "http";
 import { throwError } from "@isdk/common-error";
 import { uuid } from "@isdk/hash";
+import { toEventMatcher } from './event-pattern';
 
 type Events = (string | RegExp)[];
 
@@ -190,8 +191,9 @@ export class SSEChannel {
         client.events = [];
       }
       for (const event of events) {
-        if (!client.events.some(e => e.toString() === event.toString())) {
-          client.events.push(event);
+        const normalized = toEventMatcher(event);
+        if (!client.events.some(e => e.toString() === normalized.toString())) {
+          client.events.push(normalized);
         }
       }
       return true;
@@ -212,8 +214,9 @@ export class SSEChannel {
     const client = this.clients.get(clientId);
     if (client) {
       if (client.events) {
+        const normalizedToRemove = events.map(e => toEventMatcher(e));
         client.events = client.events.filter(existingEvent =>
-          !events.some(eventToRemove => eventToRemove.toString() === existingEvent.toString())
+          !normalizedToRemove.some(eventToRemove => eventToRemove.toString() === existingEvent.toString())
         );
       }
       return true;
@@ -254,6 +257,9 @@ export class SSEChannel {
     }
 
     if (events instanceof RegExp || typeof events === 'string') {events = [events]};
+    if (events) {
+      events = events.map(e => toEventMatcher(e)) as Events;
+    }
     const c: SSEClient = { req, res, events, clientId: finalClientId };
     const maxStreamDuration = this.options.maxStreamDuration
     let cacheControl = 'max-age=0, stale-while-revalidate=0, stale-if-error=0, no-transform'

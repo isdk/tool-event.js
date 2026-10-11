@@ -4,7 +4,10 @@
  * These tests verify that all browser-safe components can be imported and used
  * correctly without pulling in Node.js-specific modules.
  */
+import http from 'node:http' // drives the SSE server below
+
 import { describe, expect, it, vi, beforeAll, afterAll } from 'vitest'
+import { waitForSettled } from './utils/wait'
 
 // ---------------------------------------------------------------------------
 // 1. Verify all exports from the browser entry are accessible
@@ -39,6 +42,9 @@ import {
 
   // URL param utility
   genUrlParamsStr,
+
+  // Event pattern utilities
+  normalizeEventPattern,
 } from '../src/browser'
 
 // Type-only exports cannot be tested at runtime, but we verify they are defined
@@ -86,6 +92,12 @@ describe('browser entry - named exports', () => {
     expect(genUrlParamsStr({ key: 'val' })).toBe('?p=' + encodeURIComponent('{"key":"val"}'))
     expect(genUrlParamsStr({ key: 'val' }, true)).toBe('p=' + encodeURIComponent('{"key":"val"}'))
     expect(genUrlParamsStr({})).toBe('')
+  })
+
+  it('should export normalizeEventPattern', () => {
+    expect(normalizeEventPattern).toBeTypeOf('function')
+    expect(normalizeEventPattern('/group:.*/')).toBeInstanceOf(RegExp)
+    expect(normalizeEventPattern('group:one')).toBe('group:one')
   })
 })
 
@@ -244,65 +256,254 @@ describe('SseClientPubSubTransport (browser)', () => {
     )
   })
 
-  it('should connect and return a stream when EventSource sends welcome', async () => {
-    // Mock EventSource to immediately fire a 'welcome' event
-    const originalES = globalThis.EventSource
-
-    class MockEventSource {
-      static CONNECTING = 0
-      static OPEN = 1
-      static CLOSED = 2
-      readyState = 0
-      private listeners = new Map<string, Set<Function>>()
-      private _closed = false
-      onopen: any = null
-      onerror: any = null
-
-      constructor(_url: string) {
-        setTimeout(() => {
-          if (!this._closed) {
-            this.readyState = 1
-            const handlers = this.listeners.get('welcome')
-            if (handlers) {
-              handlers.forEach(h => h({ data: JSON.stringify({ clientId: 'mock-client-id' }) }))
-            }
-          }
-        }, 10)
+  // The transport imports `EventSource` from the `eventsource` peer dependency,
+  // so there is no global to swap for a mock: these cases run the real class
+  // against a `node:http` server that emits a fixed script of SSE frames. The
+  // first frame is the `welcome` handshake (written as soon as the request
+  // arrives); the rest are spaced out so a test can register listeners before
+  // they are delivered. The response is never ended, so the connection stays
+  // open while the test asserts on it.
+  const withSseServer = async (frames: { event: string; data: any }[], run: (apiRoot: string) => Promise<void>) => {
+    const srv = http.createServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Connection': 'keep-alive' })
+      let i = 0
+      const write = () => {
+        const f = frames[i++]
+        res.write(`event: ${f.event}\ndata: ${JSON.stringify(f.data)}\n\n`)
+        if (i < frames.length) setTimeout(write, 200)
       }
-
-      addEventListener(event: string, handler: Function) {
-        if (!this.listeners.has(event)) { this.listeners.set(event, new Set()) }
-        this.listeners.get(event)!.add(handler)
-      }
-
-      removeEventListener(event: string, handler: Function) {
-        this.listeners.get(event)?.delete(handler)
-      }
-
-      close() {
-        this._closed = true
-        this.readyState = 2
-      }
-    }
-
-    globalThis.EventSource = MockEventSource as any
-
+      write()
+    })
+    const port = await new Promise<number>((resolve) => {
+      srv.listen(0)
+      srv.once('listening', () => resolve(srv.address().port))
+    })
     try {
-      const transport = new SseClientPubSubTransport()
-      transport.setApiRoot('http://localhost:3000/api/')
-      const stream = await transport.connect('test-event')
-
-      expect(stream).toBeDefined()
-      expect(stream.clientId).toBe('mock-client-id')
-      expect(stream.protocol).toBe('sse')
-      expect(stream.on).toBeTypeOf('function')
-      expect(stream.off).toBeTypeOf('function')
-      expect(stream.close).toBeTypeOf('function')
-      expect(stream.readyState).toBe(1)
+      await run(`http://localhost:${port}/api/`)
     } finally {
-      globalThis.EventSource = originalES
+      srv.close()
     }
+  }
+  // Raw-frame variant: the frames are written verbatim, so a test can emit a
+  // payload that is not valid JSON — the transport must not let that tear down
+  // the connection.
+  const withRawSseServer = async (rawFrames: string[], run: (apiRoot: string) => Promise<void>) => {
+    const srv = http.createServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Connection': 'keep-alive' })
+      let i = 0
+      const write = () => {
+        const f = rawFrames[i++]
+        if (f !== undefined) res.write(f)
+        if (i < rawFrames.length) setTimeout(write, 200)
+      }
+      write()
+    })
+    srv.on('error', () => {})
+    const port = await new Promise<number>((resolve) => {
+      srv.listen(0)
+      srv.once('listening', () => resolve((srv.address() as any).port))
+    })
+    try {
+      await run(`http://localhost:${port}/api/`)
+    } finally {
+      srv.close()
+    }
+  }
+
+  const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
+
+  it('should connect and return a stream when EventSource sends welcome', async () => {
+    await withSseServer(
+      [{ event: 'welcome', data: { clientId: 'real-client-id' } }],
+      async (apiRoot) => {
+        const transport = new SseClientPubSubTransport()
+        transport.setApiRoot(apiRoot)
+        const stream = await transport.connect('test-event')
+
+        expect(stream.clientId).toBe('real-client-id')
+        expect(stream.protocol).toBe('sse')
+        expect(stream.on).toBeTypeOf('function')
+        expect(stream.off).toBeTypeOf('function')
+        expect(stream.addRegExEventListener).toBeTypeOf('function')
+        expect(stream.removeRegExEventListener).toBeTypeOf('function')
+        expect(stream.close).toBeTypeOf('function')
+        // Still connected: OPEN.
+        expect(stream.readyState).toBe(1)
+        stream.close()
+        expect(stream.readyState).toBe(2)
+      }
+    )
   })
+
+  it('should dispatch events via addRegExEventListener with string-form regex', async () => {
+    await withSseServer(
+      [
+        { event: 'welcome', data: { clientId: 'real-regex-id' } },
+        { event: 'group:one', data: { value: 1 } },
+        { event: 'group:two', data: { value: 2 } },
+        { event: 'other', data: { value: 3 } },
+        { event: 'group:three', data: { value: 4 } },
+      ],
+      async (apiRoot) => {
+        const transport = new SseClientPubSubTransport()
+        transport.setApiRoot(apiRoot)
+        const stream = await transport.connect('test-event')
+
+        const received: any[] = []
+        const handler = (data: any, ctx: any) => {
+          received.push([data, ctx.event])
+        }
+        stream.addRegExEventListener!('/^group:.*/', handler)
+
+        // Frames arrive 200ms apart: group:one, group:two, other, group:three.
+        await waitForSettled(() => received.length >= 2, {
+          settle: 250,
+          label: 'both regex-matching frames delivered',
+        })
+        expect(received).toStrictEqual([[{ value: 1 }, 'group:one'], [{ value: 2 }, 'group:two']])
+
+        stream.removeRegExEventListener!('/^group:.*/', handler)
+        await sleep(400) // negative window: covers the trailing group:three frame
+        // `group:three` arrives after the listener was removed.
+        expect(received).toHaveLength(2)
+        stream.close()
+      }
+    )
+  })
+
+  it('should dispatch events via addRegExEventListener with RegExp object', async () => {
+    await withSseServer(
+      [
+        { event: 'welcome', data: { clientId: 'real-regex-obj-id' } },
+        { event: 'error:disk-full', data: { severity: 'high' } },
+        { event: 'warning:memory', data: { severity: 'medium' } },
+        { event: 'info:startup', data: { severity: 'low' } },
+      ],
+      async (apiRoot) => {
+        const transport = new SseClientPubSubTransport()
+        transport.setApiRoot(apiRoot)
+        const stream = await transport.connect('test-event')
+
+        const received: any[] = []
+        const handler = (data: any, ctx: any) => {
+          received.push([data, ctx.event])
+        }
+        stream.addRegExEventListener!(/(error|warning):.*/, handler)
+
+        await waitForSettled(() => received.length >= 2, {
+          settle: 250,
+          label: 'both regex-matching frames delivered',
+        })
+        expect(received).toStrictEqual([
+          [{ severity: 'high' }, 'error:disk-full'],
+          [{ severity: 'medium' }, 'warning:memory'],
+        ])
+        stream.close()
+      }
+    )
+  })
+
+  it('should deliver every matching event to a global-flag regex listener', async () => {
+    // `test()` on a /g/ regex is stateful (it advances `lastIndex`), so matching
+    // with the flags as given delivers every other event. The transport must
+    // match with a stateless copy.
+    await withSseServer(
+      [
+        { event: 'welcome', data: { clientId: 'g-flag-id' } },
+        { event: 'g-one', data: { n: 1 } },
+        { event: 'g-two', data: { n: 2 } },
+        { event: 'g-three', data: { n: 3 } },
+        { event: 'g-four', data: { n: 4 } },
+      ],
+      async (apiRoot) => {
+        const transport = new SseClientPubSubTransport()
+        transport.setApiRoot(apiRoot)
+        const stream = await transport.connect('test-event')
+
+        const received: string[] = []
+        stream.addRegExEventListener!('/^g-.*/g', (_data: any, ctx: any) => { received.push(ctx.event) })
+
+        await waitForSettled(() => received.length >= 4, {
+          settle: 150,
+          label: 'every matching event delivered to the /g/ listener',
+        })
+        expect(received).toEqual(['g-one', 'g-two', 'g-three', 'g-four'])
+        expect(stream.readyState).toBe(1)
+        stream.close()
+      }
+    )
+  })
+
+  it('should keep the stream alive when a payload is not valid JSON', async () => {
+    // A frame whose `data:` is plain text used to throw out of the transport's
+    // `dispatchEvent` hook, which the EventSource implementation reports as a
+    // failed connection: every listener on the stream lost the rest of the run.
+    await withRawSseServer(
+      [
+        'event: welcome\ndata: {"clientId":"raw-id"}\n\n',
+        'event: plain-one\ndata: plain text not json\n\n',
+        'event: plain-two\ndata: {"n":2}\n\n',
+      ],
+      async (apiRoot) => {
+        const transport = new SseClientPubSubTransport()
+        transport.setApiRoot(apiRoot)
+        const stream = await transport.connect('test-event')
+
+        const regexGot: any[] = []
+        stream.addRegExEventListener!('/^plain-.*/', (data: any, ctx: any) => { regexGot.push([data, ctx.event]) })
+        const exactGot: any[] = []
+        stream.on('plain-two', (data: any, ctx: any) => { exactGot.push([data, ctx.event]) })
+
+        await waitForSettled(() => regexGot.length >= 2, {
+          settle: 150,
+          label: 'frames after the non-JSON payload still delivered',
+        })
+        // The unparseable payload is handed over verbatim rather than throwing.
+        expect(regexGot).toEqual([
+          ['plain text not json', 'plain-one'],
+          [{ n: 2 }, 'plain-two'],
+        ])
+        expect(exactGot).toEqual([[{ n: 2 }, 'plain-two']])
+        expect(stream.readyState).toBe(1)
+        stream.close()
+      }
+    )
+  })
+
+  it('should not tear down the stream when a regex listener throws', async () => {
+    // The listener is consumer code; its exception must not be reported as a
+    // connection failure to the EventSource implementation.
+    await withSseServer(
+      [
+        { event: 'welcome', data: { clientId: 'throw-id' } },
+        { event: 'boom-one', data: { n: 1 } },
+        { event: 'boom-two', data: { n: 2 } },
+      ],
+      async (apiRoot) => {
+        const transport = new SseClientPubSubTransport()
+        transport.setApiRoot(apiRoot)
+        const stream = await transport.connect('test-event')
+
+        let seen = 0
+        stream.addRegExEventListener!('/^boom-.*/', () => {
+          seen++
+          throw new Error('listener exploded')
+        })
+        const exactGot: number[] = []
+        stream.on('boom-two', (data: any) => { exactGot.push(data.n) })
+
+        await waitForSettled(() => seen >= 2, {
+          settle: 150,
+          label: 'stream survived the throwing listener and delivered the rest',
+        })
+        expect(seen).toBe(2)
+        expect(exactGot).toEqual([2])
+        expect(stream.readyState).toBe(1)
+        stream.close()
+      }
+    )
+  })
+
 })
 
 // ---------------------------------------------------------------------------

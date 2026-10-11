@@ -13,15 +13,25 @@ This package is built upon `@isdk/tool-func` and `@isdk/tool-rpc`. Please ensure
 The project includes both unit tests and browser-based E2E tests.
 
 ```bash
-# Unit tests (vitest, 22 tests)
+# Unit tests (vitest, 94 tests)
 pnpm test
 
-# Browser E2E tests (Playwright, Chromium, 44 tests)
+# Browser E2E tests (Playwright, Chromium, 59 tests)
 pnpm test:e2e
+
+# The browser example app (examples/browser-e2e, 47 checks)
+pnpm test:examples
+
+# Unit tests, 3 repeats (vitest --repeats) — flakiness check (CI runs this)
+pnpm test:repeat
 
 # Run all tests
 pnpm test:all
 ```
+
+Tests wait on conditions with a timeout (`test/utils/wait.ts`) rather than fixed
+sleeps: a loaded runner gets its full timeout budget, an idle runner does not pay
+for sleeps. Fixed waits remain only where the assertion is that nothing arrives.
 
 The E2E tests cover:
 - Basic SSE event communication (publish, subscribe, unsubscribe)
@@ -29,8 +39,12 @@ The E2E tests cover:
 - Multi-data type support (object, array, string)
 - Stream lifecycle (close, cleanup)
 - Reconnection with `Last-Event-ID` replay (missed events recovery)
+- Regex (string-form and `RegExp`) subscriptions over SSE
+- Regression coverage for non-JSON payloads, throwing listeners, global-flag regex, and dedup across separate `subscribe` calls
 - `@isdk/tool-event/transports/pubsub/browser` subpath imports in browser
 - `EventServer` bidirectional communication via HTTP bridge transport
+
+`pnpm test:examples` runs the app under `examples/browser-e2e` through the same Playwright harness, so the documented usage is verified against the current API rather than left as untested prose. Pass `--app`, `--config`, `--server`, `--vite-port` and `--sse-port` to `test/e2e/run-e2e.mjs` to point the harness at another app.
 
 These tests run automatically in CI on every push/PR to `main` that touches the `packages/tool-event` directory.
 
@@ -41,6 +55,7 @@ These tests run automatically in CI on every push/PR to `main` that touches the 
 - **🔗 Seamless Integration:** Extends `@isdk/tool-rpc`'s `ResServerTools` and `ResClientTools`, making event endpoints behave like any other RESTful/RPC tool.
 - **🔄 Automatic Forwarding:** Easily forward events from a server-side event bus to clients, or forward local client-side events to the server.
 - **🎯 Targeted Publishing:** Publish events from the server to all subscribed clients or target specific clients by their ID.
+- **🔍 Pattern Subscriptions:** Subscribe with a regex — `'/^user-.*/'` or `/^user-.*/` — on both server and client; exact and overlapping regex subscriptions are deduplicated to a single delivery.
 - **🔐 Secure by Default:** The server generates a unique UUID for each connected client. Client-published events are sandboxed and are not automatically injected into the server's main event bus unless explicitly enabled (`autoInjectToLocalBus`), preventing unintended side effects.
 
 ## 🚀 Quick Start
@@ -50,6 +65,8 @@ These tests run automatically in CI on every push/PR to `main` that touches the 
 ```bash
 npm install @isdk/tool-event
 ```
+
+The client-side SSE transport uses [`eventsource`](https://github.com/EventSource/eventsource), declared as a **peer dependency**. It is environment-agnostic — the same implementation runs in browsers and in Node.js, where no `EventSource` is built in — so the package imports the class directly instead of reading a global. Package managers install peer dependencies automatically; if your setup strips them, add `npm install eventsource`. See [pubsub.md](./pubsub.md) for the transport interfaces, including regex subscriptions.
 
 ### 2. Server-Side Setup (`server.ts`)
 
@@ -271,6 +288,18 @@ async function manageSubscriptions() {
   }, 10000);
 }
 ```
+
+Subscriptions also accept patterns, so one call can cover a family of events — on the client and on the server:
+
+```typescript
+// String-form regex, or a RegExp object — both work everywhere an event name does.
+await eventClient.subscribe(['/^user-.*/', /^order-/])
+eventClient.on('/^user-.*/', (name: string, data: any) => console.log(name, data))
+
+eventServer.forward(['/^log-(error|warning)$/i'])
+```
+
+A string is a regex only when it is written as `/source/flags`; the `g` and `y` flags are ignored when matching, and an exact name plus a regex covering it deliver **one** event, not two. Full rules: [Pattern (Regex) Subscriptions](./pubsub.md#pattern-regex-subscriptions).
 
 ### 4. Client-Side Event Forwarding
 

@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { findPort, sleep } from '@isdk/util';
+import { findPort } from '@isdk/util';
+import { waitFor } from './utils/wait';
 import { EventEmitter } from 'events-ex';
 
 import { ToolFunc, Funcs } from '@isdk/tool-func';
@@ -82,7 +83,7 @@ describe('EventTransport End-to-End Test', () => {
     });
 
     await client1.init(['news']);
-    await sleep(50); // Allow time for connection to establish
+    await waitFor(() => (client1 as any)._stream?.readyState === 1, { label: 'client1 stream open' });
 
     // Publish only on server1
     eventServer1.publish({data: { message: 'hello from server 1' }, event: 'news'});
@@ -94,7 +95,6 @@ describe('EventTransport End-to-End Test', () => {
   });
 
   it('should forward a client event to the server', async () => {
-    const eventBus = eventBusProvider.runSync();
     const client2 = ResClientTools.get('events2') as EventClient;
     expect(client2).toBeInstanceOf(EventClient);
     makeEventable(client2);
@@ -131,7 +131,10 @@ describe('EventTransport End-to-End Test', () => {
 
     await client1.init(['event1-only']);
     await client2.init(['event2-only']);
-    await sleep(50);
+    await waitFor(
+      () => (client1 as any)._stream?.readyState === 1 && (client2 as any)._stream?.readyState === 1,
+      { label: 'both client streams open' },
+    );
 
     // Publish to each server
     eventServer1.publish({data: { from: 1 }, event: 'event1-only'});

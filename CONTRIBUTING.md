@@ -5,8 +5,10 @@ Please feel free to file GitHub Issues or propose Pull Requests. We're always ha
 ## Testing
 
 ```shell
-pnpm test         # Unit tests (vitest)
-pnpm test:e2e     # Browser E2E tests (Playwright, 44 tests)
+pnpm test         # Unit tests (vitest, 94 tests)
+pnpm test:repeat   # Unit tests, 3 repeats (vitest --repeats) — flakiness check
+pnpm test:e2e     # Browser E2E tests (Playwright, 59 tests)
+pnpm test:examples # Browser example app (examples/browser-e2e, 47 checks)
 pnpm test:all     # All tests (unit + E2E)
 ```
 

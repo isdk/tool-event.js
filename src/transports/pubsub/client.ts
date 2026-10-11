@@ -70,6 +70,28 @@ export interface PubSubClientStream {
    * standard `EventTarget` interface.
    */
   removeEventListener?: PubSubClientStream['off'];
+
+  /** Registers a regex/string-form-regex event listener.
+   * The pattern can be a RegExp object or a string-form regex.
+   * Unlike on(), it will match events whose names satisfy the regex.
+   *
+   * Optional: a transport that does not implement it cannot deliver pattern
+   * subscriptions, and `EventClient` warns once per pattern when one is
+   * subscribed on such a transport.
+   * @param pattern The regex pattern to match event names against.
+   * @param listener The callback to execute when a matching event is received. */
+  addRegExEventListener?: (
+    pattern: string | RegExp,
+    listener: (data: any, ctx?: PubSubCtx) => void
+  ) => void;
+
+  /** Removes a previously registered regex/string-form-regex event listener.
+   * @param pattern The regex pattern used when registering.
+   * @param listener The listener function to remove. */
+  removeRegExEventListener?: (
+    pattern: string | RegExp,
+    listener: (data: any, ctx?: PubSubCtx) => void
+  ) => void;
 }
 
 /**

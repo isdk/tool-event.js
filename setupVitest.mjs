@@ -1,5 +1,6 @@
-import {EventSource} from 'eventsource'
-global.EventSource = EventSource
+// No global EventSource install: `eventsource` is a peer dependency and is
+// environment-agnostic, so `SseClientPubSubTransport` imports it directly and
+// tests that need the class import it themselves.
 
 // can not use the `--no-file-parallelism` to test
 // ERR_DLOPEN_FAILED

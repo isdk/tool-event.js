@@ -15,6 +15,7 @@ import {
   EventToolFunc,
   event,
   genUrlParamsStr,
+  EventSource,
   backendEventable,
   eventClient,
   eventServer,
@@ -78,6 +79,33 @@ function setStatus(msg: string, ok?: boolean) {
   el.style.color = ok === undefined ? '#888' : ok ? '#4ecca3' : '#e94560'
 }
 
+const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms))
+
+/**
+ * Poll `condition` until it holds, so the suite pays only what the browser
+ * actually needs on a fast runner and keeps its full budget on a loaded one.
+ */
+async function waitFor(
+  condition: () => boolean,
+  { timeout = TEST_TIMEOUT, interval = 25, label = 'condition' }: { timeout?: number; interval?: number; label?: string } = {},
+): Promise<void> {
+  const deadline = Date.now() + timeout
+  for (;;) {
+    if (condition()) return
+    if (Date.now() >= deadline) throw new Error(`waitFor timed out after ${timeout}ms: ${label}`)
+    await sleep(interval)
+  }
+}
+
+/** Poll until `condition`, then keep observing for `settle` ms (proves exact counts). */
+async function waitForSettled(
+  condition: () => boolean,
+  { settle = 300, timeout, interval, label }: { settle?: number; timeout?: number; interval?: number; label?: string } = {},
+): Promise<void> {
+  await waitFor(condition, { timeout, interval, label })
+  await sleep(settle)
+}
+
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   return Promise.race([
     promise,
@@ -113,6 +141,12 @@ async function runTests() {
     // 3. genUrlParamsStr
     const qs = genUrlParamsStr({ msg: 'hi' })
     report('genUrlParamsStr', qs === '?p=' + encodeURIComponent('{"msg":"hi"}'), qs)
+
+    // 3.5 EventSource: `eventsource` is a peer dependency and is
+    // environment-agnostic, so there is nothing to install on the global — the
+    // transport imports it directly and every SSE test below runs that same
+    // implementation (single connection, retry: + Last-Event-ID reconnection).
+    report('EventSource class exists', typeof EventSource === 'function', '')
 
     // 4. SseClientPubSubTransport setup
     const transport = new SseClientPubSubTransport()
@@ -179,9 +213,10 @@ async function runTests() {
     const client = new EventClient('e2e-user')
     // Wire EventClient's event handling directly to the SSE stream
     // to avoid sending RPC calls that our test server doesn't support
-    client.on = (evt: string, handler: Function) => { stream.on(evt, handler as any); return client }
-    client.off = (evt: string, handler: Function) => { stream.off(evt, handler as any); return client }
-    client.emit = (evt: string, data: any) => { (emitter as any).emit(evt, data); return client }
+    const clientProxy = client as any
+    clientProxy.on = (evt: string, handler: Function) => { stream.on(evt, handler as any); return clientProxy }
+    clientProxy.off = (evt: string, handler: Function) => { stream.off(evt, handler as any); return clientProxy }
+    clientProxy.emit = (evt: string, data: any) => { (emitter as any).emit(evt, data); return clientProxy }
 
     const clientPromise = new Promise<any>(resolve => {
       client.on('e2e-client', (data: any) => resolve(data))
@@ -289,8 +324,8 @@ async function runTests() {
     await fetch(SSE_URL + '/api/trigger?event=e2e-after-close', {
       method: 'POST', body: '{}',
     })
-    // Give it a moment to arrive
-    await new Promise(r => setTimeout(r, 300))
+    // Give it a moment to arrive (negative window: nothing should arrive)
+    await sleep(300)
     stream.off('e2e-after-close', lateHandler)
     report('No events after stream close', !lateEventReceived, '')
 
@@ -339,14 +374,14 @@ async function runTests() {
     await fetch(SSE_URL + '/api/trigger?event=e2e-lid', {
       method: 'POST', body: JSON.stringify({ seq: 1 }),
     })
-    await new Promise(r => setTimeout(r, 300))
+    await waitForSettled(() => lidEvents.includes(1), { settle: 100, label: 'event 1 received before the drop' })
 
     // Tell server to drop ALL SSE connections
     await fetch(SSE_URL + '/api/disconnect', { method: 'POST' })
 
     // Wait a tiny bit for disconnect to propagate, then fire events 2 & 3
     // These will be stored in server history but NOT received (no connection)
-    await new Promise(r => setTimeout(r, 100))
+    await sleep(100)
     await fetch(SSE_URL + '/api/trigger?event=e2e-lid', {
       method: 'POST', body: JSON.stringify({ seq: 2 }),
     })
@@ -356,12 +391,14 @@ async function runTests() {
 
     // Wait for EventSource to auto-reconnect (retry: 1000ms) and receive replay
     // EventSource sends Last-Event-ID header, server replays events 2 & 3 from history
+    await waitFor(() => lidEvents.includes(2) && lidEvents.includes(3), {
+      label: 'missed events replayed after reconnect',
+    })
     // Also verify event 4 arrives after reconnect
-    await new Promise(r => setTimeout(r, 3500))
     await fetch(SSE_URL + '/api/trigger?event=e2e-lid', {
       method: 'POST', body: JSON.stringify({ seq: 4 }),
     })
-    await new Promise(r => setTimeout(r, 500))
+    await waitForSettled(() => lidEvents.includes(4), { settle: 200, label: 'event 4 received after the replay' })
 
     // Verify: should have unique seqs 1,2,3,4
     // Use Set to deduplicate in case EventSource delivers events more than once
@@ -505,6 +542,291 @@ async function runTests() {
     EventServer.setPubSubTransport(undefined)
     esStream.close()
     report('EventServer: cleanup done', true, '')
+
+    // ──────────── 17. Regex pattern event subscription ────────────
+    setStatus('🔤 Testing regex pattern subscriptions...')
+
+    // The polyfill installed at the start of the run is what makes these
+    // regex subscriptions observable: it hands every message to the
+    // transport's dispatchEvent, where regex patterns are matched.
+    // Create a fresh transport+stream for regex tests
+    const regexTransport = new SseClientPubSubTransport()
+    regexTransport.setApiRoot(SSE_URL + '/api/')
+    const regexStream = await withTimeout(
+      regexTransport.connect('event'),
+      TEST_TIMEOUT,
+      'regex SSE connection'
+    )
+    report('Regex tests: SSE connection established', !!regexStream.clientId, 'clientId: ' + regexStream.clientId)
+
+    // 17a. String-form regex: /^e2e-regex-.*/
+    const regexStringReceived: string[] = []
+    regexStream.addRegExEventListener!('/^e2e-regex-.*/', (data: any) => {
+      regexStringReceived.push(data.n)
+    })
+    await fetch(SSE_URL + '/api/trigger?event=e2e-regex-one', {
+      method: 'POST', body: JSON.stringify({ n: 'one' }),
+    })
+    await fetch(SSE_URL + '/api/trigger?event=e2e-regex-two', {
+      method: 'POST', body: JSON.stringify({ n: 'two' }),
+    })
+    await fetch(SSE_URL + '/api/trigger?event=e2e-other', {
+      method: 'POST', body: JSON.stringify({ n: 'other' }),
+    })
+    await waitForSettled(
+      () => regexStringReceived.includes('one') && regexStringReceived.includes('two'),
+      { settle: 300, label: 'string-form regex matched both events' },
+    )
+    const regexStrOk = regexStringReceived.includes('one') && regexStringReceived.includes('two') && !regexStringReceived.includes('other')
+    report('addRegExEventListener with string-form regex /^e2e-regex-.*/',
+      regexStrOk,
+      'received: ' + regexStringReceived.join(',')
+    )
+
+    // 17b. RegExp object: /^e2e-regex-obj-.*/
+    const regexObjReceived: string[] = []
+    regexStream.addRegExEventListener!(/^e2e-regex-obj-.*/, (data: any) => {
+      regexObjReceived.push(data.n)
+    })
+    await fetch(SSE_URL + '/api/trigger?event=e2e-regex-obj-alpha', {
+      method: 'POST', body: JSON.stringify({ n: 'alpha' }),
+    })
+    await fetch(SSE_URL + '/api/trigger?event=e2e-regex-obj-beta', {
+      method: 'POST', body: JSON.stringify({ n: 'beta' }),
+    })
+    await fetch(SSE_URL + '/api/trigger?event=e2e-nomatch', {
+      method: 'POST', body: JSON.stringify({ n: 'no-match' }),
+    })
+    await waitForSettled(
+      () => regexObjReceived.includes('alpha') && regexObjReceived.includes('beta'),
+      { settle: 300, label: 'RegExp-object subscription matched both events' },
+    )
+    const regexObjOk = regexObjReceived.includes('alpha') && regexObjReceived.includes('beta') && !regexObjReceived.includes('no-match')
+    report('addRegExEventListener with RegExp object /^e2e-regex-obj-.*/',
+      regexObjOk,
+      'received: ' + regexObjReceived.join(',')
+    )
+
+    // 17c. Mixed exact + regex: both fire for same event
+    let mixedExactCount = 0
+    let mixedRegexCount = 0
+    const mixedP = new Promise<void>(resolve => {
+      const check = () => { if (mixedExactCount >= 1 && mixedRegexCount >= 1) resolve() }
+      regexStream.on('e2e-mixed-event', () => { mixedExactCount++; check() })
+      regexStream.addRegExEventListener!('/^e2e-mixed-.*/', () => { mixedRegexCount++; check() })
+    })
+    await fetch(SSE_URL + '/api/trigger?event=e2e-mixed-event', {
+      method: 'POST', body: JSON.stringify({}),
+    })
+    await withTimeout(mixedP, TEST_TIMEOUT, 'mixed exact+regex')
+    const mixedOk = mixedExactCount === 1 && mixedRegexCount === 1
+    report('Mixed: on() and addRegExEventListener() both receive matching event',
+      mixedOk,
+      'exact:' + mixedExactCount + ' regex:' + mixedRegexCount
+    )
+
+    // 17d. Remove regex listener
+    let removedCalled = false
+    const removedHandler = () => { removedCalled = true }
+    regexStream.addRegExEventListener!('/^e2e-removed-.*/', removedHandler)
+    regexStream.removeRegExEventListener!('/^e2e-removed-.*/', removedHandler)
+    await fetch(SSE_URL + '/api/trigger?event=e2e-removed-test', {
+      method: 'POST', body: JSON.stringify({}),
+    })
+    await sleep(300) // negative window: the removed listener must stay silent
+    report('removeRegExEventListener: listener removed before event fires',
+      !removedCalled,
+      'called=' + removedCalled
+    )
+
+    // 17e. Multiple regex patterns
+    const multiPatternReceived: string[] = []
+    regexStream.addRegExEventListener!('/^e2e-multi-a-.*/', (data: any) => {
+      multiPatternReceived.push('a:' + data.n)
+    })
+    regexStream.addRegExEventListener!('/^e2e-multi-b-.*/', (data: any) => {
+      multiPatternReceived.push('b:' + data.n)
+    })
+    await fetch(SSE_URL + '/api/trigger?event=e2e-multi-a-1', {
+      method: 'POST', body: JSON.stringify({ n: '1' }),
+    })
+    await fetch(SSE_URL + '/api/trigger?event=e2e-multi-b-2', {
+      method: 'POST', body: JSON.stringify({ n: '2' }),
+    })
+    await waitForSettled(
+      () => multiPatternReceived.includes('a:1') && multiPatternReceived.includes('b:2'),
+      { settle: 200, label: 'both regex patterns matched their own events' },
+    )
+    const multiOk = multiPatternReceived.includes('a:1') && multiPatternReceived.includes('b:2')
+    report('Multiple addRegExEventListener patterns each match correctly',
+      multiOk,
+      'received: ' + multiPatternReceived.join(',')
+    )
+
+    // Clean up
+    regexStream.close()
+    report('Regex tests: cleanup done', true, '')
+
+    // ──────────── 18. Regression: defects found in code review ────────────
+    // Each of these failed before the fixes; they are the browser-side
+    // counterparts of the unit tests in test/browser.test.ts and
+    // test/event-server.test.ts, exercised over a real SSE connection.
+    setStatus('🛡️ Testing P0 regressions...')
+
+    const regTransport = new SseClientPubSubTransport()
+    regTransport.setApiRoot(SSE_URL + '/api/')
+    const regStream = await withTimeout(
+      regTransport.connect('event'),
+      TEST_TIMEOUT,
+      'regression SSE connection'
+    )
+    report('Regression: SSE connection established', !!regStream.clientId, 'clientId: ' + regStream.clientId)
+
+    // 18a. A frame whose payload is not JSON must be delivered as the raw string
+    //      and must not tear the stream down (it used to kill every listener).
+    const rawReceived: string[] = []
+    regStream.addRegExEventListener!('/^e2e-raw-.*/', (data: any) => {
+      rawReceived.push(typeof data === 'string' ? data : JSON.stringify(data))
+    })
+    await fetch(SSE_URL + '/api/raw?event=e2e-raw-text', {
+      method: 'POST',
+      body: 'plain text not json',
+    })
+    await waitForSettled(() => rawReceived.includes('plain text not json'), {
+      settle: 100,
+      label: 'non-JSON frame delivered as a raw string',
+    })
+    const readyAfterRaw = regStream.readyState
+    const afterRawP = new Promise<any>(resolve => regStream.on('e2e-raw-after', (d: any) => resolve(d)))
+    await fetch(SSE_URL + '/api/trigger?event=e2e-raw-after', {
+      method: 'POST', body: JSON.stringify({ n: 'after-raw' }),
+    })
+    const afterRawData = await withTimeout(afterRawP, TEST_TIMEOUT, 'event after non-JSON frame')
+    report('P0: non-JSON payload delivered as raw string, stream survives',
+      rawReceived.includes('plain text not json') && readyAfterRaw === 1 && afterRawData?.n === 'after-raw',
+      `payload=${JSON.stringify(rawReceived[0])} readyState=${readyAfterRaw} next=${JSON.stringify(afterRawData)}`
+    )
+
+    // 18b. A regex listener that throws must not end the connection.
+    const throwP = new Promise<void>(resolve => {
+      regStream.addRegExEventListener!('/^e2e-throw-.*/', () => {
+        resolve()
+        throw new Error('listener exploded')
+      })
+    })
+    await fetch(SSE_URL + '/api/trigger?event=e2e-throw-boom', {
+      method: 'POST', body: JSON.stringify({ n: 'boom' }),
+    })
+    await withTimeout(throwP, TEST_TIMEOUT, 'throwing regex listener')
+    const afterThrowP = new Promise<any>(resolve => regStream.on('e2e-throw-after', (d: any) => resolve(d)))
+    await fetch(SSE_URL + '/api/trigger?event=e2e-throw-after', {
+      method: 'POST', body: JSON.stringify({ n: 'after-throw' }),
+    })
+    const afterThrowData = await withTimeout(afterThrowP, TEST_TIMEOUT, 'event after throwing listener')
+    report('P0: throwing regex listener does not tear down the stream',
+      afterThrowData?.n === 'after-throw' && regStream.readyState === 1,
+      `readyState=${regStream.readyState} next=${JSON.stringify(afterThrowData)}`
+    )
+
+    // 18c. A global-flag regex must match every event, not every other one.
+    const gflagReceived: string[] = []
+    regStream.addRegExEventListener!('/^e2e-gflag-.*/g', (data: any) => {
+      gflagReceived.push(data.n)
+    })
+    for (const n of ['one', 'two', 'three', 'four']) {
+      await fetch(SSE_URL + '/api/trigger?event=e2e-gflag-' + n, {
+        method: 'POST', body: JSON.stringify({ n }),
+      })
+    }
+    await waitForSettled(() => gflagReceived.length >= 4, {
+      settle: 200,
+      label: 'global-flag regex matched every event',
+    })
+    report('P0: global-flag regex /^e2e-gflag-.*/g delivers every matching event',
+      gflagReceived.length === 4,
+      'received: ' + gflagReceived.join(',')
+    )
+
+    // 18d/18e. Dedup across *separate* subscribe calls, in both orders. The
+    // transport control calls (sub/unsub) are stubbed: the test server has no
+    // RPC endpoint, same as the EventClient test above. The dedup logic under
+    // test is EventClient's own listener bookkeeping.
+    // The client's own listener bookkeeping is observed at the transport
+    // boundary: after both subscriptions the stream must carry exactly one
+    // installed listener for the event (the covering regex), and the event must
+    // arrive once. `on`/`off` on an EventClient instance are RPC-backed, so the
+    // stream is the observable interface here. The spy wraps `connect`, so it
+    // survives the reconnect `subscribe` triggers.
+    const makeDedupClient = () => {
+      const c: any = new EventClient('event')
+      c.sub = async (p: any) => ({ ok: true, event: p.event })
+      c.unsub = async (p: any) => ({ ok: true, event: p.event })
+      return c
+    }
+
+    const makeDedupSpy = (eventName: string, counter: () => void) => {
+      const counts = { exact: 0, regex: 0 }
+      const transport = new SseClientPubSubTransport()
+      transport.setApiRoot(SSE_URL + '/api/')
+      const connect0 = transport.connect.bind(transport)
+      transport.connect = async (url: string, params?: any) => {
+        const s: any = await connect0(url, params)
+        const on0 = s.on.bind(s)
+        const off0 = s.off.bind(s)
+        const add0 = s.addRegExEventListener!.bind(s)
+        // The test's own delivery counter is excluded from the counts by listener
+        // identity: it is not one of the client's subscriptions.
+        s.on = (e: string, l: any) => { if (e === eventName && l !== counter) counts.exact++; return on0(e, l) }
+        s.off = (e: string, l: any) => { if (e === eventName && l !== counter) counts.exact--; return off0(e, l) }
+        s.addRegExEventListener = (p: any, l: any) => { counts.regex++; return add0(p, l) }
+        s.on(eventName, counter)
+        return s
+      }
+      return { transport, counts }
+    }
+
+    // 18d. exact first, covering regex in a separate subscribe() call
+    let exactFirstDeliveries = 0
+    const exactFirstSpy = makeDedupSpy('e2e-twostep-exact', () => { exactFirstDeliveries++ })
+    EventClient.setPubSubTransport(exactFirstSpy.transport)
+    const exactFirst: any = makeDedupClient()
+    await exactFirst.subscribe('e2e-twostep-exact')
+    await exactFirst.subscribe('/^e2e-twostep-.*/')
+    await fetch(SSE_URL + '/api/trigger?event=e2e-twostep-exact', {
+      method: 'POST', body: JSON.stringify({ n: 'once' }),
+    })
+    await waitForSettled(() => exactFirstDeliveries >= 1, {
+      settle: 300,
+      label: 'event delivered to the dedup client',
+    })
+    report('P0: exact subscribed before covering regex (separate calls) delivers once',
+      exactFirstSpy.counts.exact === 0 && exactFirstSpy.counts.regex === 1 && exactFirstDeliveries === 1,
+      `installed exact=${exactFirstSpy.counts.exact} regex=${exactFirstSpy.counts.regex} deliveries=${exactFirstDeliveries}`
+    )
+    exactFirst.close()
+
+    // 18e. covering regex first, exact in a separate subscribe() call
+    let regexFirstDeliveries = 0
+    const regexFirstSpy = makeDedupSpy('e2e-reverse-exact', () => { regexFirstDeliveries++ })
+    EventClient.setPubSubTransport(regexFirstSpy.transport)
+    const regexFirst: any = makeDedupClient()
+    await regexFirst.subscribe('/^e2e-reverse-.*/')
+    await regexFirst.subscribe('e2e-reverse-exact')
+    await fetch(SSE_URL + '/api/trigger?event=e2e-reverse-exact', {
+      method: 'POST', body: JSON.stringify({ n: 'once' }),
+    })
+    await waitForSettled(() => regexFirstDeliveries >= 1, {
+      settle: 300,
+      label: 'event delivered to the dedup client',
+    })
+    report('P0: covering regex subscribed before exact (separate calls) delivers once',
+      regexFirstSpy.counts.exact === 0 && regexFirstSpy.counts.regex === 1 && regexFirstDeliveries === 1,
+      `installed exact=${regexFirstSpy.counts.exact} regex=${regexFirstSpy.counts.regex} deliveries=${regexFirstDeliveries}`
+    )
+    regexFirst.close()
+
+    regStream.close()
+    report('P0 regressions: cleanup done', true, '')
 
     // All done
     const passed = RESULTS.filter(r => r.passed).length

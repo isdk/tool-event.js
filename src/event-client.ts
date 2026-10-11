@@ -2,7 +2,7 @@ import type { Event } from 'events-ex'
 import { defaultsDeep } from 'lodash-es'
 import { ResClientTools } from '@isdk/tool-rpc'
 
-import { EventName } from './utils'
+import { EventName, eventPatternKey, toEventMatcher } from './utils'
 import { PubSubCtx, IPubSubClientTransport, PubSubClientStream } from './transports/pubsub'
 
 export interface EventClientFuncParams {
@@ -31,8 +31,13 @@ export class EventClient extends ResClientTools {
   _stream: PubSubClientStream | undefined
   _streamEvents: string[] | undefined
 
-   _sseListeners: Record<string, (data:any, ctx?: PubSubCtx)=>void> = {}
+  _desiredListeners: Record<string, (data:any, ctx?: PubSubCtx)=>void> = {}
+  _desiredExact: Set<string> = new Set()
+  _desiredRegexes: Map<string, RegExp> = new Map()
+  _activeExact: Set<string> = new Set()
+  _activeRegexes: Set<string> = new Set()
   _forwardEvents: Set<string> = new Set()
+  private _regexUnsupportedWarned: Set<string> = new Set()
 
   get clientId() {
     return this._stream?.clientId
@@ -62,16 +67,22 @@ export class EventClient extends ResClientTools {
 
   description = 'subscribe server event'
 
-  async initEventStream(events?: string|string[]) {
-    const list = typeof events === 'string' ? [events] : events
+  async initEventStream(events?: string | RegExp | string[]) {
+    // Normalise to a pattern list the same way `subscribe`/`unsubscribe` do:
+    // a bare `RegExp` is one pattern, not something to call `.map` on.
+    const patterns: (string | RegExp)[] | undefined =
+      events === undefined ? undefined : Array.isArray(events) ? events : [events]
+    const eventList = patterns?.map((event) => this._patternKey(event))
     if (this._stream && this._stream.readyState !== 2 /* CLOSED */) {
-      if (!this._streamEvents || (list && list.every(e => this._streamEvents!.includes(e)))) {
+      if (!eventList || eventList.every((event) => this._desiredListeners.has(event))) {
         return this._stream
       } else {
         this._stream.close()
+        this._activeExact.clear()
+        this._activeRegexes.clear()
       }
     }
-    const params = list ? {event: list} : undefined
+    const params = eventList ? {event: eventList} : undefined
     // Pass the relative path (this.name) to the transport.
     // The transport is responsible for combining it with the apiRoot.
     const stream = this._stream = await (this.constructor as typeof EventClient).pubSubTransport.connect(this.name!, params)
@@ -79,13 +90,87 @@ export class EventClient extends ResClientTools {
       this.fetchOptions = defaultsDeep({clientId: stream.clientId}, this.fetchOptions)
     }
 
-
-    // 重新挂载已订阅事件
-    Object.entries(this._sseListeners).forEach(([event, listener]) => {
-      stream.on(event, listener)
-    })
-    this._streamEvents = list
+    this._streamEvents = eventList ?? Object.keys(this._desiredListeners)
+    this._syncTransport(stream)
     return stream
+  }
+
+  private _patternKey(event: string | RegExp): string {
+    return eventPatternKey(event)
+  }
+
+  private _normalizePattern(event: string | RegExp): string | RegExp {
+    return toEventMatcher(event)
+  }
+
+  private _isCoveredByDesiredRegex(eventName: string): boolean {
+    for (const regex of this._desiredRegexes.values()) {
+      if (regex.test(eventName)) return true
+    }
+    return false
+  }
+
+  // A transport without `addRegExEventListener` cannot match patterns at all, so
+  // the subscription is accepted by the server and never delivered locally.
+  // Say so once per pattern rather than failing silently.
+  private _warnRegexUnsupported(key: string, stream: PubSubClientStream) {
+    if (this._regexUnsupportedWarned.has(key)) return
+    this._regexUnsupportedWarned.add(key)
+    console.warn(
+      `EventClient: regex subscription ${key} will not be delivered — ` +
+      `the ${stream.protocol ?? 'current'} transport does not implement addRegExEventListener.`
+    )
+  }
+
+  private _ensureListener(pattern: string | RegExp): (data:any, ctx?: PubSubCtx)=>void {
+    const key = this._patternKey(pattern)
+    const existing = this._desiredListeners[key]
+    if (existing) return existing
+    const listener = (data:any, ctx?: PubSubCtx) => this.esListener(ctx?.event || key, data, ctx)
+    this._desiredListeners[key] = listener
+    return listener
+  }
+
+  private _syncTransport(stream: PubSubClientStream) {
+    for (const key of [...this._activeRegexes]) {
+      if (!this._desiredRegexes.has(key)) {
+        const listener = this._desiredListeners[key]
+        if (listener) stream.removeRegExEventListener?.(key, listener)
+        this._activeRegexes.delete(key)
+      }
+    }
+
+    // Drop exact listeners that are no longer desired, and the ones a regex
+    // subscribed *later* already covers: an exact listener that is still active
+    // alongside the regex covering it delivers that event a second time, so the
+    // dedup has to run on every sync, not only when the exact is first added.
+    for (const key of [...this._activeExact]) {
+      if (!this._desiredExact.has(key) || this._isCoveredByDesiredRegex(key)) {
+        const listener = this._desiredListeners[key]
+        if (listener) stream.off(key, listener)
+        this._activeExact.delete(key)
+      }
+    }
+
+    for (const [key, regex] of this._desiredRegexes) {
+      if (!this._activeRegexes.has(key)) {
+        if (!stream.addRegExEventListener) {
+          this._warnRegexUnsupported(key, stream)
+          continue
+        }
+        const listener = this._ensureListener(key)
+        stream.addRegExEventListener(regex, listener)
+        this._activeRegexes.add(key)
+      }
+    }
+
+    for (const key of this._desiredExact) {
+      if (!this._activeExact.has(key) && !this._isCoveredByDesiredRegex(key)) {
+        const listener = this._ensureListener(key)
+        stream.on(key, listener)
+        this._activeExact.add(key)
+      }
+    }
   }
 
   // pass server sent event to eventBus if any
@@ -126,21 +211,25 @@ export class EventClient extends ResClientTools {
    * subscribe server event
    * @param events
    */
-  async subscribe(events: string|string[]) {
+  async subscribe(events: string | RegExp | string[]) {
+    const patterns = (Array.isArray(events) ? events : [events]).map((event) => this._patternKey(event))
+    const subPayload = Array.isArray(events) ? patterns : patterns[0]
     if (!this.active) {
-      await this.initEventStream(events)
+      await this.initEventStream(patterns)
     }
-    const result = await this.sub({event: events})
-    if (typeof events === 'string') {
-      events = [events]
-    }
-    const evtSource = await this.getEvtSource()
-    for (const event of events) {
-      if (!this._sseListeners[event]) {
-        const listener = this._sseListeners[event] = (data:any, ctx?: PubSubCtx) => this.esListener(event, data, ctx);
-        evtSource.on(event, listener)
+    const result = await this.sub({event: subPayload})
+    for (const key of patterns) {
+      const pattern = this._normalizePattern(key)
+      this._ensureListener(key)
+      if (pattern instanceof RegExp) {
+        this._desiredRegexes.set(key, pattern)
+      } else {
+        this._desiredExact.add(key)
       }
     }
+    const evtSource = await this.getEvtSource()
+    this._syncTransport(evtSource)
+    this._streamEvents = Object.keys(this._desiredListeners)
     return result
   }
 
@@ -148,19 +237,20 @@ export class EventClient extends ResClientTools {
    * unsubscribe server event
    * @param events
    */
-  async unsubscribe(events: string|string[]) {
-    if (typeof events === 'string') {
-      events = [events]
+  async unsubscribe(events: string | RegExp | string[]) {
+    const patterns = (Array.isArray(events) ? events : [events]).map((event) => this._patternKey(event))
+    const unsubPayload = Array.isArray(events) ? patterns : patterns[0]
+    const result = await this.unsub({event: unsubPayload})
+    for (const key of patterns) {
+      this._desiredRegexes.delete(key)
+      this._desiredExact.delete(key)
     }
-    const result = await this.unsub({event: events})
     const evtSource = await this.getEvtSource()
-    for (const event of events) {
-      const listener = this._sseListeners[event]
-      if (listener) {
-        delete this._sseListeners[event]
-        evtSource.off(event, listener)
-      }
+    this._syncTransport(evtSource)
+    for (const key of patterns) {
+      delete this._desiredListeners[key]
     }
+    this._streamEvents = Object.keys(this._desiredListeners)
     return result
   }
 
@@ -204,7 +294,7 @@ export class EventClient extends ResClientTools {
     }
   }
 
-  async init(events: string|string[]) {
+  async init(events: string | RegExp | string[]) {
     // close eventsource and re-init event source
     this.setActive(false)
     await this.initEventStream(events)
@@ -216,6 +306,8 @@ export class EventClient extends ResClientTools {
     if (stream) {
       // (this.constructor as typeof EventClient).pubSubTransport.disconnect?.(this._stream)
       this._stream = undefined
+      this._activeExact.clear()
+      this._activeRegexes.clear()
       return stream.close()
     }
   }

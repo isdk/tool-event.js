@@ -13,15 +13,23 @@
 项目包含单元测试和基于浏览器的 E2E 测试。
 
 ```bash
-# 单元测试 (vitest, 22 个)
+# 单元测试 (vitest, 94 个)
 pnpm test
 
-# 浏览器 E2E 测试 (Playwright, Chromium, 44 个)
+# 浏览器 E2E 测试 (Playwright, Chromium, 59 个)
 pnpm test:e2e
+
+# 浏览器示例应用 (examples/browser-e2e，47 项检查)
+pnpm test:examples
+
+# 单元测试重复 3 轮（vitest --repeats）—— 抖动检查（CI 会跑这一项）
+pnpm test:repeat
 
 # 运行全部测试
 pnpm test:all
 ```
+
+测试不再使用固定 sleep，而是「轮询条件 + 超时」(`test/utils/wait.ts`)：高负载机器上拥有完整的超时预算，空闲机器上不会为空等待埋单。仅「断言不应有投递」这类场景保留固定观察窗口。
 
 E2E 测试覆盖范围：
 - 基本的 SSE 事件通信（发布、订阅、取消订阅）
@@ -29,8 +37,12 @@ E2E 测试覆盖范围：
 - 多数据类型支持（对象、数组、字符串）
 - 流生命周期（关闭、清理）
 - 重连与 `Last-Event-ID` 重放（断连期间丢失事件的恢复）
+- 通过 SSE 的正则订阅（字符串形式正则与 `RegExp` 对象）
+- 回归覆盖：非 JSON 负载、抛异常的 listener、带 `g` 标志的正则、多次 `subscribe` 调用之间的去重
 - `@isdk/tool-event/transports/pubsub/browser` 子路径在浏览器中的导入
 - `EventServer` 通过 HTTP 桥接传输实现双向通信
+
+`pnpm test:examples` 会用同一套 Playwright harness 运行 `examples/browser-e2e` 下的应用，让文档里的用法持续接受验证，而不是停留在不成文的示例。可通过 `test/e2e/run-e2e.mjs` 的 `--app`、`--config`、`--server`、`--vite-port`、`--sse-port` 参数指向其他应用。
 
 这些测试在每次推送/PR 到 `main` 分支且涉及 `packages/tool-event` 目录变更时自动在 CI 中运行。
 
@@ -41,6 +53,7 @@ E2E 测试覆盖范围：
 - **🔗 无缝集成:** 扩展了 `@isdk/tool-rpc` 的 `ResServerTools` 和 `ResClientTools`，使事件端点的行为与其他 RESTful/RPC 工具一样。
 - **🔄 自动转发:** 可轻松地将服务器端事件总线上的事件转发给客户端，或将本地客户端事件转发到服务器。
 - **🎯 定向发布:** 从服务器向所有订阅的客户端发布事件，或通过客户端 ID 定向发布给特定客户端。
+- **🔍 模式订阅:** 服务器端与客户端均支持正则订阅 —— `'/^user-.*/'` 或 `/^user-.*/`；精确事件名与覆盖它的正则同时订阅时，事件只投递一次。
 - **🔐 默认安全:** 服务器为每个连接的客户端生成唯一 UUID。客户端发布的事件是沙箱化的，不会自动注入到服务器的主事件总线中，除非显式启用 (`autoInjectToLocalBus`)，以防止意外的副作用。
 
 ## 🚀 快速上手
@@ -50,6 +63,8 @@ E2E 测试覆盖范围：
 ```bash
 npm install @isdk/tool-event
 ```
+
+客户端的 SSE 传输使用 [`eventsource`](https://github.com/EventSource/eventsource)，声明为本包的 **peer dependency**（对等依赖）。该实现与运行环境无关 —— 浏览器和 Node.js 中运行的是同一份代码，而 Node.js 本身并没有内置 `EventSource` —— 因此本包直接导入该类，而不是读取全局对象。包管理器会自动安装 peer dependency；如果你的安装流程会跳过 peer dependency，请额外执行 `npm install eventsource`。传输层接口（含正则订阅）见 [pubsub.md](./pubsub.md)。
 
 ### 2. 服务端设置 (`server.ts`)
 
@@ -271,6 +286,18 @@ async function manageSubscriptions() {
   }, 10000);
 }
 ```
+
+订阅也可以传入模式（正则），一次调用即可覆盖一类事件，服务器端与客户端均适用：
+
+```typescript
+// 字符串形式正则，或直接传入 RegExp 对象 —— 所有接受事件名的位置都接受模式。
+await eventClient.subscribe(['/^user-.*/', /^order-/])
+eventClient.on('/^user-.*/', (name: string, data: any) => console.log(name, data))
+
+eventServer.forward(['/^log-(error|warning)$/i'])
+```
+
+只有形如 `/source/flags` 的字符串才会被当作正则；匹配时 `g` 与 `y` 标志会被忽略；精确事件名与覆盖它的正则同时订阅时，事件只投递**一次**而不会重复。完整规则见[模式（正则）订阅](./pubsub.md#pattern-regex-subscriptions)。
 
 ### 4. 客户端事件转发
 

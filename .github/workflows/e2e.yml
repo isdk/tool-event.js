@@ -41,7 +41,21 @@ jobs:
       - name: Build tool-event
         run: pnpm run build-fast
 
+      # Repeating the unit suite surfaces order-dependent and timing-dependent
+      # flakiness that a single green run hides.
+      - name: Run unit tests (3 repeats)
+        run: pnpm run test:repeat
+        env:
+          CI: 'true'
+
       - name: Run E2E tests
         run: pnpm run test:e2e
+        env:
+          CI: 'true'
+
+      # The example app is a real consumer of the browser entry: running it keeps
+      # examples/ verified against the package's current API.
+      - name: Run browser example app
+        run: pnpm run test:examples
         env:
           CI: 'true'

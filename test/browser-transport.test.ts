@@ -9,7 +9,8 @@
  * - Verifies SseServerPubSubTransport is NOT re-exported from the browser barrel
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { findPort, sleep } from '@isdk/util';
+import { findPort } from '@isdk/util';
+import { sleep, waitFor, waitForSettled } from './utils/wait';
 import { EventEmitter } from 'events-ex';
 
 import { ToolFunc, Funcs } from '@isdk/tool-func';
@@ -125,7 +126,7 @@ describe('Browser subpath integration test', () => {
       })
 
       await client.init(['browser-news'])
-      await sleep(80)
+      await waitFor(() => (client as any)._stream?.readyState === 1, { label: 'client stream open' })
 
       // Publish from the server
       eventServer.publish({ data: { msg: 'browser integration works' }, event: 'browser-news' })
@@ -174,11 +175,11 @@ describe('Browser subpath integration test', () => {
 
       // Subscribe to 'sub-test'
       await client.init(['sub-test'])
-      await sleep(80)
+      await waitFor(() => (client as any)._stream?.readyState === 1, { label: 'client stream open' })
 
       // Publish while subscribed
       eventServer.publish({ data: { n: 1 }, event: 'sub-test' })
-      await sleep(30)
+      await waitForSettled(() => eventCount >= 1, { settle: 50, label: 'subscribed event delivered' })
       expect(eventCount).toBe(1)
 
       // Unsubscribe
@@ -206,7 +207,7 @@ describe('Browser subpath integration test', () => {
       })
 
       await client.init(events)
-      await sleep(80)
+      await waitFor(() => (client as any)._stream?.readyState === 1, { label: 'client stream open' })
 
       // Publish each event — use a plain data object that does NOT have
       // an 'event' property, to avoid colliding with SSEChannel.publish's
@@ -216,7 +217,7 @@ describe('Browser subpath integration test', () => {
         await sleep(10)
       }
 
-      await sleep(30)
+      await waitForSettled(() => received.size >= 3, { settle: 50, label: 'all three subscriptions delivered' })
       expect(received.size).toBe(3)
       events.forEach(evt => expect(received.has(evt)).toBe(true))
 
