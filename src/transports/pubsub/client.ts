@@ -17,6 +17,14 @@ export interface PubSubClientStream {
   clientId: string;
 
   /**
+   * The resume credential the server handed back in `welcome`, if it issues one.
+   * `EventClient` puts it on the RPC calls that follow, so the control plane resolves the
+   * same identity the stream was given — which is what lets `$sub`/`$publish` find this
+   * session without trusting a client-written id.
+   */
+  sessionToken?: string;
+
+  /**
    * The protocol being used for this stream (e.g., 'sse', 'ws', 'ipc').
    */
   protocol: 'sse' | 'ws' | 'ipc' | string;

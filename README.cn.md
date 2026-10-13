@@ -79,19 +79,23 @@ npm install @isdk/tool-event
 库中已经导出了一个预先实例化的 `EventServer` 类实例，名为 `eventServer`。该实例的工具名称由导出的常量 `EventName` 定义（其值为 `'event'`）。
 
 ```typescript
-import { EventServer, eventServer, SseServerPubSubTransport } from '@isdk/tool-event';
-import { ServerTools, HttpServerToolTransport } from '@isdk/tool-rpc';
+import { EventServer, eventServer, SseServerPubSubTransport, sseCredentialReader } from '@isdk/tool-event';
+import { HttpServerToolTransport, RpcSessionIdentityPolicy } from '@isdk/tool-rpc';
+
+// 两面共用一个身份策略：流请求本身就是一次普通 RPC 调用，所以传输层上的策略既决定
+// 「这条流是谁」，也决定后续 `$sub`/`$publish` 「来自谁」；`sseCredentialReader` 负
+// 责读取流通过 URL 交回的重连凭证（EventSource 无法设置 header）。
+const identity = new RpcSessionIdentityPolicy();
 
 // 1. 设置服务端 SSE 传输层 (SSE 是内置的传输协议)
-EventServer.setPubSubTransport(new SseServerPubSubTransport());
+EventServer.setPubSubTransport(new SseServerPubSubTransport({ revoke: (id) => identity.revoke(id) }));
 
 // 2. 注册预设的 EventServer 实例 (其实例名称 eventServer.name 默认为 'event')
 eventServer.register();
 
-// 3. 启动 HTTP 服务器，注册 RPC 处理和服务发现
-const server = new HttpServerToolTransport();
+// 3. 启动 HTTP 服务器。服务发现是内置工具（`rpcApis`），挂在 RPC 前缀上，无需再注册发现处理器
+const server = new HttpServerToolTransport({ identity, credentialReader: sseCredentialReader });
 server.addRpcHandler('/api');
-server.addDiscoveryHandler('/api', () => ServerTools.toJSON());
 await server.start({ port: 3000 });
 
 console.log('事件服务端已启动：http://localhost:3000/api');
@@ -204,7 +208,7 @@ graph TD
 
 - **获取事件流**：当客户端第一次需要订阅事件时，`EventClient` 会向 `GET /api/event` (这是 `EventServer` 的 `list` 方法) 发起请求。这个请求的响应就是一个 `text/event-stream` 类型的持久流。服务端会分配一个唯一的 UUID 作为 `clientId`，并通过 `welcome` 事件发送给客户端。从概念上讲，这等同于"获取"一个代表实时事件流的资源。
 
-- **会话身份与重连接续**：`welcome` 事件除了携带服务端分配的 `clientId`，还携带一个重连凭证（`sessionToken`）。一次连接归属于哪个会话，由可注入的策略（`SSEIdentityPolicy`）决定，默认实现是服务端签发的不透明 token —— 因此客户端无法自选其 `$sub`/`$publish` 所匹配的 id。连接断开后，客户端带着该凭证重新打开流，续用同一个会话：`clientId` 不变、订阅列表不变，并从它最后收到的事件处重放。重放覆盖从客户端最后确认的事件 id 之后发布的全部消息（在通道历史缓存 `historySize` 范围内，并按续用会话的订阅列表过滤）—— 因此连接断开期间发布的消息也会送达。认证留在事件协议之外 —— 外部认证协议是替换该策略，而不是扩展它。
+- **会话身份与重连接续**：`welcome` 事件除了携带服务端分配的 `clientId`，还携带一个重连凭证（`sessionToken`）。一次连接归属于哪个会话，由 RPC 传输层上的 tool-rpc `RpcIdentityPolicy` 决定 —— 流就是它的一次请求，因此流与后续调用解析到同一个身份 —— 默认实现是 `RpcSessionIdentityPolicy` 签发的服务端不透明 token。客户端无法自选其 `$sub`/`$publish` 所匹配的 id。连接断开后，客户端带着该凭证重新打开流，续用同一个会话：`clientId` 不变、订阅列表不变，并从它最后收到的事件处重放。重放覆盖从客户端最后确认的事件 id 之后发布的全部消息（在通道历史缓存 `historySize` 范围内，并按续用会话的订阅列表过滤）—— 因此连接断开期间发布的消息也会送达。认证留在事件协议之外 —— 外部认证协议是替换该策略，而不是扩展它。
 
 - **管理事件流**：后续的 `subscribe` 和 `publish` 操作可以被看作是对这个"资源"状态的修改，它们通过独立的、常规的 RPC 请求来完成。
 
@@ -396,13 +400,20 @@ console.log(eventClient.clientId); // 服务端分配，且会跟随会话
 // 新增的订阅），并补发客户端尚未确认的消息。
 ```
 
-一次连接请求归属于哪个会话，由可注入的策略（`SSEIdentityPolicy`）决定：`resolve`（凭证 → 会话）、`issue`（为新连接分配 id）、`credential`（`welcome` 下发什么）、`revoke`（会话销毁时）。默认实现签发服务端不透明 token，带 TTL 与使用次数限制；外部认证协议通过替换该策略接入，而不是扩展事件协议。
+一次连接请求归属于哪个会话，由 tool-rpc 的 `RpcIdentityPolicy` 决定 —— 就是装在 RPC 传输层上的那一个，因为流请求本身就经过那条流水线：
 
 ```typescript
+// 流与后续调用共用同一个策略实例
+const identity = new RpcSessionIdentityPolicy({ ttlMs: 30_000 });
+const server = new HttpServerToolTransport({ identity, credentialReader: sseCredentialReader });
 EventServer.setPubSubTransport(new SseServerPubSubTransport({
-  identity: myIdentityPolicy, // 例如校验由您的认证服务签发的签名 token
+  revoke: (id) => identity.revoke(id), // 通道重置时一并抹掉该会话的凭证
 }));
 ```
+
+`match`（凭证 → 身份）每请求只跑一次；`assign` 负责为新会话分配 id，其 `credential` 就是 `welcome` 交回的内容。默认策略签发服务端不透明 token，TTL 滑动、不限使用次数 —— 每个 `$sub` 都是一次出示，设上限会把凭证提前花完。外部认证协议通过替换该策略接入（`match` 可以是异步：JWKS、查库），而不是扩展事件协议。不装策略则流无法建立：没有服务端定的 id 可以定位会话，`list` 会返回 401。
+
+**跨域部署要自己放行凭证所在的请求头。** 控制面调用把凭证放在自定义头 `rpc-session-token` 里，而浏览器只有在服务端把它列进 `Access-Control-Allow-Headers`（并正确应答 preflight）后才会带上自定义头；RPC 前缀前面的反向代理也必须透传该头。流本身不受影响 —— 它走 `session_token` query —— 所以缺头是静默失败：每个控制面调用都解析成一个新会话。同源部署（包括示例用的 dev-server 代理）无需额外配置。
 
 重放覆盖从客户端最后确认的事件 id 之后发布的全部消息（在通道历史缓存 `historySize` 范围内，并按续用会话的订阅列表过滤）—— 连接断开期间发布的消息也会送达。
 
@@ -423,6 +434,7 @@ EventServer.setPubSubTransport(new SseServerPubSubTransport({
 ```typescript
 // transports/WebSocketServerTransport.ts
 import { WebSocketServer } from 'ws';
+import type { RpcIdentity } from '@isdk/tool-rpc';
 import type { IPubSubServerTransport, PubSubServerSession } from '@isdk/tool-event';
 
 export class WebSocketServerTransport implements IPubSubServerTransport {
@@ -435,10 +447,10 @@ export class WebSocketServerTransport implements IPubSubServerTransport {
   private onDis?: (session: PubSubServerSession) => void;
 
   constructor(options: { port: number }) {
-    this.wss = new WebSocketServer({ port: options.port });
-
-    this.wss.on('connection', (ws) => {
-      const clientId = uuid(); // 生成唯一ID
+    this.wss = new WebSocketServer({ port: options.port });    this.wss.on('connection', (ws, req) => {
+      // id 在服务端生成，绝不取自客户端。挂在 RPC 传输层后面的传输，键用身份策略为升级请求
+      // 解析出的那个 id；独立运行的传输自己生成，并把这个映射留在服务端。
+      const clientId = uuid();
       const session: PubSubServerSession = {
         id: clientId,
         clientId,
@@ -464,12 +476,13 @@ export class WebSocketServerTransport implements IPubSubServerTransport {
     });
   }
 
-  connect(options?: { req?: any; res?: any; clientId?: string; events?: string[] }) {
+  connect(options?: { req?: any; res?: any; events?: string[]; identity?: RpcIdentity }) {
     throw new Error('WebSocket 传输使用自己的连接生命周期。');
   }
 
-  getSessionFromReq(req: any): PubSubServerSession | undefined {
-    return this.sessions.get(req.headers['x-client-id']);
+  // `$sub`/`$unsub`/`$publish` 走的查找：身份策略为该请求解析出的 id（`ctx.identity.id`），客户端无法自选。
+  getSessionFromIdentity(identityId?: string): PubSubServerSession | undefined {
+    return identityId ? this.sessions.get(identityId) : undefined;
   }
 
   subscribe(session: PubSubServerSession, events: string[]) {

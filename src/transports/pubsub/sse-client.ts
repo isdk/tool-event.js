@@ -233,6 +233,9 @@ export class SseClientPubSubTransport implements IPubSubClientTransport {
 
     const stream: PubSubClientStream = {
       get clientId() { return state.clientId; },
+      // The credential the stream would present on a reconnect. `EventClient` puts it on
+      // the RPC calls too, so the control plane resolves this same session.
+      get sessionToken() { return state.token; },
       protocol: 'sse',
       get readyState() { return es.readyState; },
       on, off,

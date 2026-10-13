@@ -3,9 +3,9 @@ import { describe, expect, it, vi, beforeAll, afterAll } from 'vitest'
 import { findPort } from '@isdk/util'
 import { sleep, waitFor, waitForSettled } from './utils/wait'
 import { Funcs, ToolFunc } from '@isdk/tool-func'
-import { ClientTools, HttpServerToolTransport, HttpClientToolTransport, ServerTools, RpcTransportManager } from '@isdk/tool-rpc'
+import { ClientTools, HttpServerToolTransport, HttpClientToolTransport, ServerTools, RpcTransportManager, RpcSessionIdentityPolicy } from '@isdk/tool-rpc'
 import { EventServer, EventClient, event, EventToolFunc, ClientEventPrefix } from '../src'
-import { EventName, backendEventable } from "../src/utils"
+import { EventName, backendEventable, sseCredentialReader } from "../src/utils"
 import { SseClientPubSubTransport, SseServerPubSubTransport } from "../src/transports/pubsub"
 import { EventSource } from 'eventsource'
 
@@ -53,9 +53,11 @@ describe('Event Server api', () => {
     // const tracker = new RpcActiveTaskTracker()
     // const dispatcher = new RpcServerDispatcher({ registry: ServerTools.items, tracker })
 
-    server = new HttpServerToolTransport()
+    // One identity policy for both planes: the SSE stream request and the $sub/$publish
+    // calls that follow it are resolved by this instance against this credential.
+    const identity = new RpcSessionIdentityPolicy()
+    server = new HttpServerToolTransport({ identity, credentialReader: sseCredentialReader })
     server.addRpcHandler(apiRoot)
-    server.addDiscoveryHandler(apiRoot, () => ServerTools.toJSON())
 
     await server.start({ port })
 
@@ -64,7 +66,7 @@ describe('Event Server api', () => {
     await ClientTools.loadFrom()
 
     EventClient.setPubSubTransport(new SseClientPubSubTransport())
-    EventServer.setPubSubTransport(new SseServerPubSubTransport())
+    EventServer.setPubSubTransport(new SseServerPubSubTransport({ revoke: (id) => identity.revoke(id) }))
   })
 
   afterAll(async () => {
@@ -972,6 +974,25 @@ describe('Event Server api', () => {
     }
   });
 
+  // ── No identity policy -> the stream is refused ─────────────────────────
+  it('should refuse an SSE stream when no identity resolved for the request', () => {
+    // The session is keyed on the id the identity policy resolved. With none, opening the
+    // stream would mean keying it on an id the client chose, which is the hole the policy
+    // exists to close — so `list` refuses, and it refuses before any SSE header is sent.
+    const bare = new EventServer('no-identity-server')
+    let err: any
+    try {
+      bare.list({ event: ['x'] } as any, { req: {} as any, res: {} as any } as any)
+    } catch (e) {
+      err = e
+    }
+    expect(err, 'a stream request with no resolved identity is refused').toBeTruthy()
+    expect(err.code, 'refused as unauthenticated').toBe(401)
+    expect(err.message, 'the refusal names the fix').toMatch(/identity/i)
+
+    ServerTools.unregister('no-identity-server')
+  });
+
   // ── Resume: the Node control/data plane across a dropped stream ──────────
   // The channel and the identity policy are unit-tested in isolation; this suite runs
   // the real stack (EventServer + EventClient + the HTTP/RPC transport + the
@@ -1291,27 +1312,40 @@ describe('Event Server api', () => {
 
     it('starts a new session when the reconnect arrives after the resume window closed', async () => {
       // The window, not the credential, is what bounds a resume: a valid credential
-      // presented to a session outside its window must not resurrect it — the client
-      // lands on a new session. `resumeWindow: 0` closes the window at the drop, which
-      // is the deterministic form of the expiry the channel suite covers on a timer.
+      // presented outside its window must not resurrect the session it came from.
+      // `resumeWindow: 0` closes the window at the drop, which is the deterministic form
+      // of the expiry the channel suite covers on a timer.
+      //
+      // What is new is the session state, not the id: the id is the identity the policy
+      // resolved, so it stays put for as long as that credential is valid.
       const pair = await openPair('resume-expired', ['rs-x'], {
         maxStreamDuration: 0,
         clientRetryInterval: 100,
         resumeWindow: 0,
       })
+      const sessionBefore = pair.session(pair.id)
+      pair.watch('rs-y')
+      await pair.client.sub({ event: 'rs-y' })
+
       pair.drop()
       await pair.resume()
 
-      expect(pair.client.clientId, 'a credential presented after the window closed must not resume the session').not.toBe(pair.id)
-      expect(pair.session(pair.client.clientId), 'the new session is live under the new id').toBeTruthy()
+      expect(pair.client.clientId, 'the id is the identity id, so it outlives the session').toBe(pair.id)
+      const sessionAfter = pair.session(pair.id)
+      expect(sessionAfter, 'the id has a live session again').toBeTruthy()
+      expect(sessionAfter, 'the session behind the id is new, not the dropped one').not.toBe(sessionBefore)
 
-      // The new stream is a working session: the subscriptions its URL carries are installed.
+      // The new session installs the list its URL carries, not the list the dropped
+      // session had accumulated over `$sub`: the URL subscription delivers, the RPC one
+      // does not.
       pair.publish('rs-x', { n: 1 })
+      pair.publish('rs-y', { n: 2 })
       await waitForSettled(() => pair.received['rs-x']!.length >= 1, {
         settle: 300,
         label: 'the new session delivers its URL subscriptions',
       })
       expect(pair.received['rs-x']).toEqual([1])
+      expect(pair.received['rs-y'], 'a $sub subscription is not carried past the window').toEqual([])
 
       closePair(pair, 'resume-expired')
     });

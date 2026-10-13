@@ -2,7 +2,7 @@ import type { Event } from 'events-ex'
 import { defaultsDeep } from 'lodash-es'
 import { ResClientTools } from '@isdk/tool-rpc'
 
-import { EventName, eventPatternKey, toEventMatcher } from './utils'
+import { EventName, eventPatternKey, toEventMatcher, SSE_SESSION_TOKEN_HEADER } from './utils'
 import { PubSubCtx, IPubSubClientTransport, PubSubClientStream } from './transports/pubsub'
 
 export interface EventClientFuncParams {
@@ -93,6 +93,19 @@ export class EventClient extends ResClientTools {
       // this client ever had.
       this.fetchOptions.clientId = stream.clientId
     }
+    // The credential the stream would present on a reconnect goes on the RPC calls too:
+    // the identity policy then resolves the control plane and the data plane to one
+    // session, and `$sub`/`$publish` reach this stream without a self-reported id.
+    // (The server has to read it — `credentialReader: sseCredentialReader` on the RPC
+    // transport — otherwise the header is just carried and ignored.)
+    // Written as a fresh copy rather than in place: `this.fetchOptions` can still be the
+    // object another client of this class shares, and a stream that hands back no
+    // credential must not strip one from it. Class-level headers keep merging in later
+    // (`fetch` deep-merges `this.fetchOptions` over the class defaults).
+    const headers = {...(this.fetchOptions?.headers ?? {})}
+    if (stream.sessionToken) headers[SSE_SESSION_TOKEN_HEADER] = stream.sessionToken
+    else delete headers[SSE_SESSION_TOKEN_HEADER]
+    this.fetchOptions = {...(this.fetchOptions ?? {}), headers}
 
     this._streamEvents = eventList ?? Object.keys(this._desiredListeners)
     this._syncTransport(stream)

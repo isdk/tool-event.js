@@ -858,6 +858,17 @@ async function runTests() {
       typeof (rpcEvent as any).publish === 'function',
       'sub/unsub/publish')
 
+    // The listing read raw. `loadFrom()` resolving only proves the call came back: a
+    // registry view that answers with `undefined` makes discovery return an empty map,
+    // and every client then "loads" zero tools without a word of error.
+    const listingRes = await withTimeout(
+      fetch(RPC_ROOT, { headers: { accept: 'application/json' } }), TEST_TIMEOUT, 'raw discovery listing')
+    const listing: any = await listingRes.json()
+    const listed = Object.keys(listing ?? {})
+    report('RPC: discovery lists the tools served by the prefix',
+      listingRes.status === 200 && listed.includes('event'),
+      `status=${listingRes.status} listed=${listed.length} [${listed.slice(0, 8).join(',')}]`)
+
     // The transport picks up the static apiUrl when installed, so the EventSource URL
     // the client builds is RPC_ROOT + 'event' — the stream EventServer.list serves.
     EventClient.setPubSubTransport(new SseClientPubSubTransport())
@@ -865,6 +876,17 @@ async function runTests() {
     await withTimeout(rpcEvent.init(['ctrl-a']), TEST_TIMEOUT, 'EventClient.init over RPC')
     report('RPC: EventClient opened its SSE stream on the RPC endpoint',
       !!rpcEvent.clientId && rpcEvent.active, `clientId: ${rpcEvent.clientId}`)
+
+    // What binds the two planes: the `welcome` frame hands back a credential, and the
+    // client presents it on every control-plane call. That — not the self-reported
+    // `rpc-client-id` — is what the server resolves the session from.
+    const issuedCredential = (rpcEvent as any)._stream?.sessionToken
+    report('RPC: the welcome frame hands back a resume credential',
+      typeof issuedCredential === 'string' && issuedCredential.length > 0,
+      issuedCredential ? `credential issued (${issuedCredential.length} chars)` : 'no credential in welcome')
+    report('RPC: the client presents that credential on its control-plane calls',
+      (rpcEvent as any).fetchOptions?.headers?.['rpc-session-token'] === issuedCredential,
+      `header: ${(rpcEvent as any).fetchOptions?.headers?.['rpc-session-token'] ?? 'missing'}`)
 
     // $sub against a live session: the server reports the per-session subscription and
     // the clientId *it* assigned. A client-supplied clientId in the payload must not
@@ -958,6 +980,33 @@ async function runTests() {
       targetHits.length === 2 && otherHits.length === 1,
       `target=${targetHits.length} other=${otherHits.length}`)
 
+    // Cross-session attempt: a forged `rpc-client-id` naming another *live* session must
+    // not move the control plane onto that session. The victim is deliberately a session
+    // with a subscription list, so an event arriving on it could only have come from the
+    // hijacked subscription — and the owner receiving it is the positive control that the
+    // `$sub` did land, on its own session.
+    const victim = subStream
+    const victimId = victim.clientId
+    let hijackOnVictim = 0
+    let hijackOnOwner = 0
+    victim.on('ctrl-hijack', () => { hijackOnVictim++ })
+    rpcEvent.on('ctrl-hijack', () => { hijackOnOwner++ })
+    const ownFetchOptions = (rpcEvent as any).fetchOptions
+    ;(rpcEvent as any).fetchOptions = { ...ownFetchOptions, clientId: victimId }
+    // `subscribe`, not the raw `$sub`: the client has to register its own listener too,
+    // otherwise a delivery that does land has nothing on the client side to count.
+    const hijackSub: any = await withTimeout(
+      rpcEvent.subscribe('ctrl-hijack'), TEST_TIMEOUT, '$sub with a forged header')
+    ;(rpcEvent as any).fetchOptions = ownFetchOptions
+    report('RPC: $sub with a forged rpc-client-id still reports its own session',
+      hijackSub?.clientId === rpcEvent.clientId && hijackSub?.clientId !== victimId,
+      `server ${hijackSub?.clientId} vs forged ${victimId}`)
+    await withTimeout(rpcEvent.publish({ event: 'ctrl-hijack', data: { n: 1 } }), TEST_TIMEOUT, 'hijack publish')
+    await sleep(300)
+    report('RPC: the forged header subscribes nobody else — only the owner receives it',
+      hijackOnOwner === 1 && hijackOnVictim === 0,
+      `owner=${hijackOnOwner} victim=${hijackOnVictim} sub=${JSON.stringify(hijackSub)}`)
+
     subStream.close()
     plainStream.close()
 
@@ -970,6 +1019,25 @@ async function runTests() {
       JSON.stringify(degraded))
 
     report('RPC: stream closed', !rpcEvent.active, '')
+
+    // The mount with no identity policy. With nothing server-decided to key a session on,
+    // the stream is refused rather than opened under whatever id the client likes — the
+    // one line of setup the migration asks of a deployer, and its failure mode.
+    const ANON_ROOT = window.location.origin + '/api/anon/'
+    const anonRes = await withTimeout(
+      fetch(ANON_ROOT + 'anon', { headers: { accept: 'text/event-stream' } }), TEST_TIMEOUT, 'no-policy stream request')
+    const anonBody = await anonRes.text()
+    report('RPC: a mount with no identity policy refuses the stream with 401',
+      anonRes.status === 401 && /identity policy/i.test(anonBody),
+      `status=${anonRes.status} body=${anonBody.slice(0, 160)}`)
+    // Positive control: the same request against the policy-mounted prefix opens.
+    const okStreamRes = await withTimeout(
+      fetch(RPC_ROOT + 'event', { headers: { accept: 'text/event-stream' } }), TEST_TIMEOUT, 'policy-mounted stream')
+    const okStreamType = okStreamRes.headers.get('content-type') ?? ''
+    await okStreamRes.body?.cancel()
+    report('RPC: the policy-mounted stream opens as an event stream (positive control)',
+      okStreamRes.status === 200 && okStreamType.includes('text/event-stream'),
+      `status=${okStreamRes.status} content-type=${okStreamType}`)
 
     // 20. Control-plane stream resilience: the server ends the response, the
     //     EventSource reconnects after the `retry:` interval carrying Last-Event-ID,
@@ -1025,6 +1093,48 @@ async function runTests() {
 
     rcStream.close()
     report('Reconnect: stream closed after recovery', rcStream.readyState === 2, `readyState=${rcStream.readyState}`)
+
+    // Control-plane continuity across a drop. The credential the *stream* was issued is
+    // what `$sub` presents, so a dropped-and-resumed session keeps answering to the same
+    // id — the self-reported header never decides.
+    await withTimeout(rpcEvent.init(['ctrl-rc2']), TEST_TIMEOUT, 'EventClient stream for control-plane continuity')
+    const continuityFirstId = rpcEvent.clientId
+    const rc2Hits: number[] = []
+    // The eventable emitter hands the listener `(eventName, data)` — the shape the ctrl-a
+    // assertions above use.
+    rpcEvent.on('ctrl-rc2', (name: string, data: any) => { if (data?.n !== undefined) rc2Hits.push(data.n) })
+
+    // Registered after `init` resolved, so this listener only sees the reconnect's welcome.
+    const rc2Welcomes: string[] = []
+    ;(rpcEvent as any)._stream.on('welcome', (d: any) => { if (d?.clientId) rc2Welcomes.push(d.clientId) })
+
+    await fetch(SSE_URL + '/api/ctrl/disconnect', { method: 'POST' })
+    await waitForSettled(() => rc2Welcomes.length >= 1, { settle: 300, label: 'the EventClient stream reconnected' })
+    report('Reconnect: the EventClient stream resumes the same session',
+      rc2Welcomes.length === 1 && rc2Welcomes[0] === continuityFirstId,
+      `first ${continuityFirstId}, resumed ${rc2Welcomes[0]}`)
+
+    const continuitySub: any = await withTimeout(
+      (rpcEvent as any).sub({ event: 'ctrl-rc2' }), TEST_TIMEOUT, '$sub after the drop')
+    report('Reconnect: $sub after the drop still resolves to that session',
+      continuitySub?.clientId === continuityFirstId,
+      `first ${continuityFirstId}, $sub reports ${continuitySub?.clientId}`)
+
+    // The server's own view of the resumed session. The subscription list is what the
+    // delivery filter reads, so this is the half of the check that rules out a
+    // subscription which never landed.
+    const clientsInfo: any = await (await fetch(SSE_URL + '/api/ctrl/clients')).json()
+    const resumedClient = (clientsInfo.clients ?? []).find((c: any) => c.clientId === continuityFirstId)
+    report('Reconnect: the resumed session carries its subscription list on the server',
+      !!resumedClient && resumedClient.events.includes('ctrl-rc2'),
+      JSON.stringify(clientsInfo.clients))
+
+    await fetch(SSE_URL + '/api/ctrl/publish?event=ctrl-rc2', { method: 'POST', body: JSON.stringify({ n: 1 }) })
+    await waitForSettled(() => rc2Hits.length >= 1, { settle: 300, label: 'delivery on the resumed session' })
+    report('Reconnect: the subscription held across the drop delivers on the resumed stream',
+      rc2Hits.length === 1 && rc2Hits[0] === 1,
+      `delivered=${rc2Hits.join(',')}`)
+    rpcEvent.close()
 
     // All done
     const passed = RESULTS.filter(r => r.passed).length

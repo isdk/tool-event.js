@@ -1,7 +1,8 @@
 import { IncomingMessage, ServerResponse } from "http";
 import { throwError } from "@isdk/common-error";
+import type { RpcIdentity } from '@isdk/tool-rpc';
 import { toEventMatcher } from './event-pattern';
-import { SSE_RESUME_LAST_EVENT_QUERY, SSEIdentityPolicy, SSETokenIdentityPolicy } from './sse-identity';
+import { SSE_RESUME_LAST_EVENT_QUERY } from './sse-identity';
 
 type Events = (string | RegExp)[];
 
@@ -46,12 +47,10 @@ export class SSEChannel {
   nextID: number
   options: Record<string, any>
   pingTimer?: NodeJS.Timeout
-  /** How a connecting request is matched to a session. Injectable; see `sse-identity`. */
-  identity: SSEIdentityPolicy
   /**
-   * Sessions that can be resumed, keyed by clientId. The live connection is dropped as
-   * soon as the socket closes, so this is what survives a drop: the subscription list
-   * the session had, plus the window in which it may be resumed.
+   * Sessions whose state survives a drop, keyed by the identity id the policy assigned.
+   * The live connection is gone as soon as the socket closes, so this is what carries
+   * over: the subscription list the session had, plus the window in which it may be.
    */
   resumable: Map<string, { events?: Events, expiresAt: number }>
 
@@ -112,12 +111,17 @@ export class SSEChannel {
    * @param options.historySize - Maximum number of messages to keep in history (default: 100). This is what bounds a reconnect's replay: everything published since the id the client acknowledged, as long as it is still in this buffer.
    * @param options.rewind - Number of historical messages to send to new clients (default: 0).
    * @param options.cors - Whether to enable CORS headers (default: false).
-   * @param options.resumeWindow - How long a dropped session may be resumed with its
-   *   subscription list (default: 30000). The window is (re)opened at every drop and at
-   *   every connect, so a session that keeps dropping stays resumable; `0` closes it at
-   *   the drop, which turns every reconnect into a new session.
-   * @param options.identity - Session identity policy (default: `SSETokenIdentityPolicy`,
-   *   server-issued token). Inject one to plug in a different credential scheme.
+   * @param options.resumeWindow - How long a dropped session keeps its subscription list
+   *   and replay position (default: 30000). The window is (re)opened at every drop and at
+   *   every connect, so a session that keeps dropping keeps them; `0` closes it at the
+   *   drop, so a reconnect starts from the URL's list. This bounds the *session state*, not
+   *   the identity: the id comes from the policy, and how long its credential is good for
+   *   is the policy's business (`ttlMs` / `maxUses`).
+   * @param options.revoke - Called with a session id when the channel is reset and the
+   *   session may no longer be resumed. Wire it to the identity policy's `revoke`
+   *   (`(id) => identity.revoke?.(id)`) so a reset channel does not leave credentials
+   *   behind. The channel holds no policy of its own: identity is decided by the RPC
+   *   transport, once per request.
    */
   constructor(options?: Record<string, any>) {
     this.options = Object.assign(
@@ -139,7 +143,6 @@ export class SSEChannel {
     this.clients = new Map()
     this.messages = []
     this.resumable = new Map()
-    this.identity = this.options.identity ?? new SSETokenIdentityPolicy()
     this.active = true
   }
 
@@ -279,25 +282,37 @@ export class SSEChannel {
    *   For a resumed session this is ignored: the list the session had at the drop is the
    *   live truth (it absorbed every `$sub`/`$unsub`), while a reconnect URL only carries
    *   the list from the *first* connect.
-   * @param clientId Accepted for signature compatibility only — the server is the issuer
-   *   and never adopts a client-supplied id, which is what keeps `$sub`/`$publish` from
-   *   being aimed at someone else's session.
+   * @param identity The session this request belongs to, as decided by the RPC
+   *   transport's `RpcIdentityPolicy` (`ctx.identity` on the `list` call that opened the
+   *   stream). Required: the channel never resolves identity itself, because a second
+   *   `match` would spend the resume credential twice and could land on a different
+   *   session than the control plane did. A client-supplied id is not a valid input here
+   *   — that is what keeps `$sub`/`$publish` from being aimed at someone else's session.
+   *   For a mount outside the RPC transport, get this from `resolveSSEIdentity`.
    * @returns The newly created client object representing the connected client.
    *
    * A session has one live stream. A connection that resumes a session whose stream is
    * still live takes it over: the replaced stream is closed, so a publish is delivered
    * once under that clientId and the session registry keeps pointing at the live stream.
-   * @throws An error if the channel is closed or if a client ID cannot be determined.
+   * @throws An error if the channel is closed or if no identity was supplied.
    */
-  connect(req: IncomingMessage, res: ServerResponse, events?: Events, clientId?: string) {
+  connect(req: IncomingMessage, res: ServerResponse, events?: Events, identity?: RpcIdentity) {
     if (!this.active) throwError('Channel closed', 'SSEChannel', SSEChannelAlreadyClosedErrCode);
 
-    // Identity comes from the policy, and the server stays the issuer: a client cannot
-    // pick the id its `$sub`/`$publish` calls are matched on. A reconnect presenting a
-    // credential the server issued resumes that session; anything else mints a new id.
-    let resumedId = this.identity.resolve({ req })
-    if (resumedId && !this.isResumable(resumedId)) resumedId = undefined
-    const finalClientId = resumedId ?? this.identity.issue({ req });
+    if (!identity?.id) {
+      throwError(
+        'SSEChannel.connect requires a resolved identity: serve the stream through the RPC '
+        + 'transport (new HttpServerToolTransport({ identity, credentialReader: sseCredentialReader })) '
+        + 'or resolve one with resolveSSEIdentity(policy, { req })',
+        'SSEChannel', 401
+      );
+    }
+
+    // Whether this connection resumes a session is the channel's call, not the policy's:
+    // the policy vouches for the credential, the resume window decides if the session is
+    // still alive. An id outside the window starts a new session.
+    const resumedId = this.isResumable(identity.id) ? identity.id : undefined
+    const finalClientId = identity.id;
 
     if (this.clients.has(finalClientId)) {
       const oldClient = this.clients.get(finalClientId);
@@ -351,12 +366,14 @@ export class SSEChannel {
     this.clients.set(c.clientId, c);
     this.resumable.set(c.clientId, { events: c.events, expiresAt: Date.now() + this.options.resumeWindow });
 
-    // Send a welcome message with the server-assigned clientId, plus the credential that
-    // lets this session be resumed if the connection drops. The standard EventSource API
-    // gives no way to send anything upstream, so the welcome frame is the only reliable
-    // channel for handing both to the client.
+    // Send a welcome message with the server-assigned clientId, plus the credential the
+    // policy issued for this session (`RpcIdentity.credential`, only present on a fresh
+    // assignment — a resumed connection already holds one and its TTL slid when it
+    // presented it). The standard EventSource API gives no way to send anything upstream,
+    // so the welcome frame is the only reliable delivery channel, which is why tool-rpc
+    // leaves the delivery to the transport instead of naming a header of its own.
     this.publish(
-      { clientId: finalClientId, sessionToken: this.identity.credential?.(finalClientId) },
+      { clientId: finalClientId, sessionToken: identity.credential },
       'welcome',
       { clientId: finalClientId }
     );
@@ -395,7 +412,8 @@ export class SSEChannel {
     this.clients.forEach(c => c.res.end())
     this.clients.clear()
     this.resumable.clear()
-    for (const clientId of known) this.identity.revoke?.(clientId)
+    const revoke = this.options.revoke
+    if (revoke) for (const clientId of known) revoke(clientId)
   }
 
   /**

@@ -82,6 +82,12 @@ export default defineConfig({
         target: process.env.RPC_PROXY_TARGET || 'http://127.0.0.1:3100',
         changeOrigin: true,
       },
+      // The no-policy mount, on its own port (RPC port + 1). The app asserts it
+      // refuses the stream, so it has to be reachable same-origin like the RPC one.
+      '/api/anon': {
+        target: process.env.ANON_PROXY_TARGET || 'http://127.0.0.1:3101',
+        changeOrigin: true,
+      },
     },
   },
 })

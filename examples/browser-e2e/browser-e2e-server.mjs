@@ -24,8 +24,8 @@ import { fileURLToPath } from 'node:url'
 // The control plane imports this package **by name** (Node's self-reference via
 // the `exports` map), which resolves to the built `dist` at runtime — the same
 // entry a real consumer gets, and what makes this example a regression guard.
-import { HttpServerToolTransport, ServerTools } from '@isdk/tool-rpc'
-import { EventServer, SseServerPubSubTransport, eventServer } from '@isdk/tool-event'
+import { HttpServerToolTransport, RpcSessionIdentityPolicy } from '@isdk/tool-rpc'
+import { EventServer, SseServerPubSubTransport, eventServer, sseCredentialReader } from '@isdk/tool-event'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const projectRoot = path.resolve(__dirname, '../..')
@@ -334,12 +334,26 @@ const RPC_API_ROOT = `http://localhost:${RPC_PORT}/api/rpc/`
 // The server side of the documented flow: an EventServer registered as a server
 // tool, with the SSE pubsub transport attached. `EventServer.list` is a stream
 // method, so GET /api/rpc/event is served as the client's EventSource stream.
-EventServer.setPubSubTransport(new SseServerPubSubTransport())
+// One identity policy for both planes. The stream request is an ordinary RPC call, so
+// the policy on the transport decides who the stream is and who its `$sub`/`$publish`
+// calls come from; `sseCredentialReader` lets it read the resume credential the stream
+// hands back in the URL, which is the only thing an EventSource can carry.
+const identity = new RpcSessionIdentityPolicy()
+EventServer.setPubSubTransport(new SseServerPubSubTransport({ revoke: (id) => identity.revoke(id) }))
 eventServer.register()
 
-const rpc = new HttpServerToolTransport()
+const rpc = new HttpServerToolTransport({ identity, credentialReader: sseCredentialReader })
+// Discovery is a built-in tool (`rpcApis`) served on the RPC prefix: no handler to add.
 rpc.addRpcHandler(RPC_API_ROOT)
-rpc.addDiscoveryHandler(RPC_API_ROOT, () => ServerTools.toJSON())
+
+// The same tool mounted by a transport with **no identity policy** — the mistake the
+// docs warn about. It gets its own port, because two transports cannot share one.
+// The browser app asserts the refusal, so the example shows both mounts side by side.
+const ANON_RPC_PORT = RPC_PORT + 1
+const anonEventServer = new EventServer('anon')
+anonEventServer.register()
+const anonRpc = new HttpServerToolTransport()
+anonRpc.addRpcHandler(`http://localhost:${ANON_RPC_PORT}/api/anon/`)
 
 server.listen(PORT, () => {
   console.log(`🚀 E2E test server running at http://localhost:${PORT}`)
@@ -348,12 +362,14 @@ server.listen(PORT, () => {
 })
 
 await rpc.start({ port: RPC_PORT })
+await anonRpc.start({ port: ANON_RPC_PORT })
 console.log(`🛰 RPC control plane at ${RPC_API_ROOT}`)
 console.log(`   discovery: GET  /api/rpc/   rpc: POST /api/rpc/<tool>`)
 console.log(`   event stream: GET /api/rpc/event`)
+console.log(`🚫 no-policy mount at http://localhost:${ANON_RPC_PORT}/api/anon/ (stream must be refused)`)
 
 function shutdown() {
-  rpc.stop(true).finally(() => process.exit(0))
+  Promise.all([rpc.stop(true), anonRpc.stop(true)]).finally(() => process.exit(0))
   setTimeout(() => process.exit(0), 2000).unref()
 }
 process.on('SIGINT', shutdown)

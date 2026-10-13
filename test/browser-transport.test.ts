@@ -22,7 +22,9 @@ import {
   RpcActiveTaskTracker,
   RpcServerDispatcher,
   RpcTransportManager,
+  RpcSessionIdentityPolicy,
 } from '@isdk/tool-rpc';
+import { sseCredentialReader } from '../src/utils';
 
 // Server-side: full PubSub transport (Node.js only)
 import { SseServerPubSubTransport } from '../src/transports/pubsub';
@@ -89,11 +91,13 @@ describe('Browser subpath integration test', () => {
       apiRoot = `http://localhost:${port}/api/`
 
       const tracker = new RpcActiveTaskTracker()
-      const dispatcher = new RpcServerDispatcher({ registry: ResServerTools.items, tracker })
+      // The class, not `.items`: built-in discovery (`rpcApis`) lists a prefix via the registry's
+      // `toJSON()`, which only the tool class has — a raw items map would list nothing.
+      const dispatcher = new RpcServerDispatcher({ registry: ResServerTools, tracker })
 
-      serverTransport = new HttpServerToolTransport({ apiUrl: apiRoot, dispatcher })
+      const identity = new RpcSessionIdentityPolicy()
+      serverTransport = new HttpServerToolTransport({ apiUrl: apiRoot, dispatcher, identity, credentialReader: sseCredentialReader })
       serverTransport.addRpcHandler(apiRoot)
-      serverTransport.addDiscoveryHandler(apiRoot, () => ResServerTools.toJSON())
 
       await serverTransport.start({ port, host: 'localhost' })
 
@@ -104,7 +108,7 @@ describe('Browser subpath integration test', () => {
       // Set up transports — server uses the full Node.js transport,
       // client uses the browser-safe SseClientPubSubTransport
       EventClient.setPubSubTransport(new SseClientPubSubTransport())
-      EventServer.setPubSubTransport(new SseServerPubSubTransport())
+      EventServer.setPubSubTransport(new SseServerPubSubTransport({ revoke: (id) => identity.revoke(id) }))
     })
 
     afterAll(async () => {

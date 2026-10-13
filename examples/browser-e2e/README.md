@@ -17,16 +17,24 @@ documented flow.
 - **Data plane** (`:3099`) — a hand-rolled SSE channel, so raw-stream behaviour
   (Last-Event-ID replay, forced disconnects, non-JSON frames) stays testable
   without depending on the built package.
-- **Control plane** (`:3100`) — the flow the README documents: tool-rpc discovery
-  (`ClientTools.loadFrom()`), `EventClient` subscribing and publishing over RPC,
-  and the EventSource stream served by `EventServer.list` through
-  `SseServerPubSubTransport`. This plane imports the **built** package (`dist`),
-  so a breaking change in the package's public API fails this example.
+- **Control plane** (`:3100`) — the flow the README documents: tool-rpc discovery (the
+  built-in `rpcApis` tool, read by `ClientTools.loadFrom()`), `EventClient` subscribing
+  and publishing over RPC, and the EventSource stream served by `EventServer.list`
+  through `SseServerPubSubTransport`. The transport carries one
+  `RpcSessionIdentityPolicy` plus `credentialReader: sseCredentialReader`, which is what
+  makes the stream and the `$sub`/`$publish` calls that follow it one session. This plane
+  imports the **built** package (`dist`), so a breaking change in the package's public
+  API fails this example.
 
 `tool-rpc`'s HTTP server sends no CORS headers, so the app reaches the control
-plane through Vite's dev-server proxy (`/api/rpc` → `:3100`) and stays
-same-origin with the page. The RPC port defaults to the SSE port + 1; override
-it with `RPC_PORT` (server) and `RPC_PROXY_TARGET` (Vite).
+plane through Vite's dev-server proxy (`/api/rpc` → `:3100`, plus `/api/anon` →
+`:3101` for the no-policy mount the app asserts is refused) and stays
+same-origin with the page. That is also why the example needs no CORS setup for
+the resume credential: same-origin requests send the `rpc-session-token` header
+freely, while a cross-origin deployment has to list it in
+`Access-Control-Allow-Headers` and forward it through any proxy (see
+`pubsub.md`, "Session Identity and Resume"). The RPC port defaults to the SSE
+port + 1; override it with `RPC_PORT` (server) and `RPC_PROXY_TARGET` (Vite).
 
 `main.ts` waits on conditions with a timeout via the shared helpers in
 `test/utils/wait.ts` (the same ones the unit and E2E suites use) instead of fixed

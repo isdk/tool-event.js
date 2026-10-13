@@ -1,27 +1,26 @@
 /**
- * Unit tests for the SSE session-identity policy (`sse-identity`).
+ * Unit tests for the SSE session-identity wire layer.
  *
- * The policy decides who a connecting request belongs to, and the default one issues
- * the credential a dropped connection presents to resume its session. These cases pin
- * the boundaries that decide a resume: where the credential is read from, what a
- * credential is worth (expiry, use limit, revocation), and that nothing a client
- * supplies can select a session the server did not issue for it.
+ * Deciding *who a request belongs to* is tool-rpc's job: an `RpcIdentityPolicy` runs once
+ * per request in the RPC transport pipeline, and the SSE stream is one of those requests.
+ * What this package owns — and what is pinned here — is the credential's wire shape:
+ * where it is read from, what the reader sees, what `welcome` hands back, and that a
+ * mount outside the RPC transport runs the policy exactly once.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+import { RpcBearerPolicy, RpcSessionIdentityPolicy } from '@isdk/tool-rpc';
 import {
   SSE_RESUME_LAST_EVENT_QUERY,
   SSE_SESSION_TOKEN_HEADER,
   SSE_SESSION_TOKEN_KEY,
   SSE_SESSION_TOKEN_QUERY,
-  SSETokenIdentityPolicy,
-  createSSEIdentity,
   extractSessionToken,
   readSSESessionCredential,
-  type SSEIdentityPolicy,
+  resolveSSEIdentity,
+  sseCredentialReader,
 } from '../src/utils/sse-identity';
-import { sleep } from './utils/wait';
 
-const req = (url?: string, headers: Record<string, string> = {}) => ({ url, headers }) as any
+const req = (url?: string, headers: Record<string, any> = {}) => ({ url, headers }) as any
 
 describe('readSSESessionCredential', () => {
   it('reads the credential from the header, and from the query when there is no header', () => {
@@ -54,6 +53,34 @@ describe('readSSESessionCredential', () => {
   })
 })
 
+describe('sseCredentialReader', () => {
+  it('covers both planes: the SSE wire first, then the standard bearer field', () => {
+    expect(sseCredentialReader(req(`/stream?${SSE_SESSION_TOKEN_QUERY}=q`))).toBe('q')
+    expect(sseCredentialReader(req('/stream', { [SSE_SESSION_TOKEN_HEADER]: 'h' }))).toBe('h')
+    expect(sseCredentialReader(req('/stream', { authorization: 'Bearer jwt-here' }))).toBe('jwt-here')
+    // A bare value is a valid RFC 7235 credential; do not require the scheme.
+    expect(sseCredentialReader(req('/stream', { authorization: 'jwt-bare' }))).toBe('jwt-bare')
+  })
+
+  it('prefers the SSE credential when a request carries both', () => {
+    const request = req(`/stream?${SSE_SESSION_TOKEN_QUERY}=sse`, {
+      [SSE_SESSION_TOKEN_HEADER]: 'sse-h',
+      authorization: 'Bearer jwt',
+    })
+    expect(sseCredentialReader(request)).toBe('sse-h')
+  })
+
+  it('reads a mixed-case Authorization header, which Mailbox headers make possible', () => {
+    expect(sseCredentialReader(req('/stream', { Authorization: 'Bearer mixed' }))).toBe('mixed')
+  })
+
+  it('says nothing about a credential it does not know', () => {
+    expect(sseCredentialReader(req('/stream'))).toBeUndefined()
+    expect(sseCredentialReader(undefined as any)).toBeUndefined()
+    expect(sseCredentialReader({ headers: { authorization: ['a', 'b'] } } as any)).toBeUndefined()
+  })
+})
+
 describe('extractSessionToken', () => {
   it('reads the credential from a welcome payload', () => {
     expect(extractSessionToken({ clientId: 'c', [SSE_SESSION_TOKEN_KEY]: 'tok' })).toBe('tok')
@@ -69,118 +96,66 @@ describe('extractSessionToken', () => {
   })
 })
 
-describe('SSETokenIdentityPolicy', () => {
-  it('mints a distinct session id per call', () => {
-    const policy = createSSEIdentity()
-    const ids = new Set([policy.issue({ req: req() }), policy.issue({ req: req() }), policy.issue({ req: req() })])
-    expect(ids.size).toBe(3)
-  })
-
-  it('hands back one stable credential per session, and a different one per session', () => {
-    const policy = createSSEIdentity()
-    const first = policy.issue({ req: req() })
-    const second = policy.issue({ req: req() })
-
-    expect(policy.credential!(first)).toBe(policy.credential!(first))
-    expect(policy.credential!(first)).not.toBe(policy.credential!(second))
-  })
-
-  it('resumes the session a credential was issued for', () => {
-    const policy = createSSEIdentity()
-    const clientId = policy.issue({ req: req() })
-    const token = policy.credential!(clientId)!
-
-    expect(policy.resolve({ req: req(`/stream?${SSE_SESSION_TOKEN_QUERY}=${token}`) })).toBe(clientId)
-    expect(policy.resolve({ req: req('/stream', { [SSE_SESSION_TOKEN_HEADER]: token }) })).toBe(clientId)
-  })
-
-  it('resolves nothing for a credential it never issued', () => {
-    const policy = createSSEIdentity()
-    policy.issue({ req: req() }) // issue a session, so the token table is not empty
-
-    expect(policy.resolve({ req: req('/stream?session_token=FORGED') })).toBeUndefined()
-    expect(policy.resolve({ req: req('/stream', { [SSE_SESSION_TOKEN_HEADER]: 'FORGED' }) })).toBeUndefined()
-    expect(policy.resolve({ req: req('/stream') })).toBeUndefined()
-  })
-
-  it('stops accepting a credential once its use limit is spent', () => {
-    const policy = new SSETokenIdentityPolicy({ maxUses: 2 })
-    const clientId = policy.issue({ req: req() })
-    const token = policy.credential!(clientId)
-    const resumeReq = req(`/stream?${SSE_SESSION_TOKEN_QUERY}=${token}`)
-
-    expect(policy.resolve({ req: resumeReq })).toBe(clientId)
-    expect(policy.resolve({ req: resumeReq })).toBe(clientId)
-    expect(policy.resolve({ req: resumeReq }), 'the third presentation exceeds the use limit').toBeUndefined()
-    expect(policy.resolve({ req: resumeReq })).toBeUndefined()
-  })
-
-  it('stops accepting a credential after its ttl, and slides the window when it is re-issued', async () => {
-    const policy = new SSETokenIdentityPolicy({ ttlMs: 30, maxUses: 10 })
-    const clientId = policy.issue({ req: req() })
-    const token = policy.credential!(clientId)
-    const resumeReq = req(`/stream?${SSE_SESSION_TOKEN_QUERY}=${token}`)
-
-    // Re-issuing (what the welcome frame does on each connect) extends the window.
-    for (let i = 0; i < 3; i++) {
-      expect(policy.resolve({ req: resumeReq })).toBe(clientId)
-      policy.credential!(clientId)
-      await sleep(15)
+describe('resolveSSEIdentity', () => {
+  it('runs the policy once: match first, assign only when nothing matched', async () => {
+    const policy = {
+      name: 'spy',
+      match: vi.fn(() => ({ id: 'matched' })),
+      assign: vi.fn(() => ({ id: 'assigned' })),
     }
-    expect(policy.resolve({ req: resumeReq }), 'the window slid with every re-issue').toBe(clientId)
+    const identity = await resolveSSEIdentity(policy, { req: req('/stream') })
 
-    await sleep(40)
-    expect(policy.resolve({ req: resumeReq }), 'an idle window lapses').toBeUndefined()
+    expect(identity.id).toBe('matched')
+    expect(policy.match).toHaveBeenCalledTimes(1)
+    expect(policy.assign, 'a match is not a new session').not.toHaveBeenCalled()
   })
 
-  it('drops a session credential on revoke', () => {
-    const policy = createSSEIdentity()
-    const clientId = policy.issue({ req: req() })
-    const other = policy.issue({ req: req() })
-    const token = policy.credential!(clientId)!
-    const otherToken = policy.credential!(other)!
-
-    policy.revoke!(clientId)
-
-    expect(policy.resolve({ req: req(`/stream?${SSE_SESSION_TOKEN_QUERY}=${token}`) })).toBeUndefined()
-    expect(policy.resolve({ req: req(`/stream?${SSE_SESSION_TOKEN_QUERY}=${otherToken}`) }), 'revoking one session must not touch another').toBe(other)
-  })
-
-  it('names the default policy and gives it the full policy surface', () => {
-    const policy = createSSEIdentity()
-    expect(policy.name).toBe('server-token')
-    expect(typeof policy.resolve).toBe('function')
-    expect(typeof policy.issue).toBe('function')
-    expect(typeof policy.credential).toBe('function')
-    expect(typeof policy.revoke).toBe('function')
-  })
-})
-
-describe('an injected policy', () => {
-  it('can be a credential-less policy: identity only, nothing to resume', () => {
-    const policy: SSEIdentityPolicy = {
-      name: 'no-credential',
-      resolve: () => undefined,
-      issue: () => 'fixed',
+  it('assigns a fresh session when the credential matched nothing', async () => {
+    const policy = {
+      name: 'spy',
+      match: vi.fn(() => undefined),
+      assign: vi.fn(() => ({ id: 'assigned', credential: 'c1' })),
     }
-    expect(policy.credential).toBeUndefined()
-    expect(policy.revoke).toBeUndefined()
-    expect(policy.resolve({ req: req('/stream') })).toBeUndefined()
-    expect(policy.issue({ req: req('/stream') })).toBe('fixed')
+    const identity = await resolveSSEIdentity(policy, { req: req('/stream'), credential: 'unknown' })
+
+    expect(identity).toEqual({ id: 'assigned', credential: 'c1' })
+    expect(policy.assign).toHaveBeenCalledTimes(1)
   })
 
-  it('can resume from a credential of its own shape', () => {
-    // Stands in for an external auth protocol: the credential is a signed string the
-    // policy recognizes, not a token minted by this module.
-    const policy: SSEIdentityPolicy = {
-      name: 'external',
-      resolve: ({ req: request }) => readSSESessionCredential(request) === 'sig=external-session' ? 'external-session' : undefined,
-      issue: () => 'external-session',
-      credential: (clientId) => `sig=${clientId}`,
+  it('reads the credential off the request when the caller did not supply one', async () => {
+    // The standalone mount only has the request; the SSE wire form has to be picked up here,
+    // otherwise a reconnect would always be read as a fresh connection.
+    const policy = new RpcSessionIdentityPolicy()
+    const first = await resolveSSEIdentity(policy, { req: req('/stream') })
+    expect(first.credential, 'the default policy issues a resume credential').toBeTruthy()
+
+    const again = await resolveSSEIdentity(policy, {
+      req: req(`/stream?${SSE_SESSION_TOKEN_QUERY}=${first.credential}`),
+    })
+    expect(again.id, 'the query credential resumes the same session').toBe(first.id)
+    expect(again.credential, 'a resumed identity carries no new credential').toBeUndefined()
+  })
+
+  it('awaits a policy whose match is async', async () => {
+    const policy = {
+      name: 'async',
+      match: async () => {
+        await new Promise(resolve => setTimeout(resolve, 5))
+        return { id: 'late' }
+      },
+      assign: () => ({ id: 'assigned' }),
     }
-    expect(policy.credential!('external-session')).toBe('sig=external-session')
-    expect(policy.resolve({ req: req('/stream?session_token=sig=external-session') })).toBe('external-session')
-    expect(policy.resolve({ req: req('/stream?session_token=sig=nobody') })).toBeUndefined()
+    expect((await resolveSSEIdentity(policy, { req: req('/stream') })).id).toBe('late')
+  })
+
+  it('lets a refusing policy throw rather than swallow it', async () => {
+    const policy = new RpcBearerPolicy({
+      verify: () => undefined,
+      allowAnonymous: false,
+      credentialReader: sseCredentialReader,
+    })
+    await expect(resolveSSEIdentity(policy, { req: req('/stream') })).rejects
+      .toMatchObject({ code: 401, status: 'unauthenticated' })
   })
 })
 

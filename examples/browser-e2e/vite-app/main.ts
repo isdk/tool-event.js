@@ -611,6 +611,48 @@ async function runTests() {
       !!rpcEvent.clientId && rpcEvent.active,
       `clientId: ${rpcEvent.clientId}`)
 
+    // The `welcome` frame hands back a resume credential, and the client presents it on
+    // the RPC calls that follow. That is what lets the server resolve `$sub`/`$publish`
+    // to this stream's session without trusting an id the client wrote.
+    const credential = (rpcEvent as any)._stream?.sessionToken
+    report('RPC: the welcome frame hands back a resume credential',
+      typeof credential === 'string' && credential.length > 0,
+      credential ? `credential issued (${credential.length} chars)` : 'no credential in welcome')
+    report('RPC: the client presents that credential on its control-plane calls',
+      (rpcEvent as any).fetchOptions?.headers?.['rpc-session-token'] === credential,
+      `header: ${(rpcEvent as any).fetchOptions?.headers?.['rpc-session-token'] ?? 'missing'}`)
+
+    // The footgun the setup warns about, shown next to the working mount: a transport
+    // with no identity policy has nothing server-decided to key a session on, so the
+    // stream is refused instead of being opened under whatever id the client likes.
+    const ANON_ROOT = window.location.origin + '/api/anon/'
+    const anonRes = await withTimeout(
+      fetch(ANON_ROOT + 'anon', { headers: { accept: 'text/event-stream' } }),
+      TEST_TIMEOUT, 'no-policy stream request')
+    const anonBody = await anonRes.text()
+    report('RPC: a mount with no identity policy refuses the stream with 401',
+      anonRes.status === 401 && /identity policy/i.test(anonBody),
+      `status=${anonRes.status} body=${anonBody.slice(0, 160)}`)
+
+    // Positive control: the same request against the policy-mounted prefix does open.
+    const openRes = await withTimeout(
+      fetch(RPC_ROOT + 'event', { headers: { accept: 'text/event-stream' } }),
+      TEST_TIMEOUT, 'policy-mounted stream')
+    const openType = openRes.headers.get('content-type') ?? ''
+    await openRes.body?.cancel()
+    report('RPC: the policy-mounted stream opens as an event stream (positive control)',
+      openRes.status === 200 && openType.includes('text/event-stream'),
+      `status=${openRes.status} content-type=${openType}`)
+
+    // A `clientId` in the payload is ignored: the session is the one the credential
+    // vouches for, which is also what makes `$publish` report a trustworthy `senderId`.
+    const forged = 'forged-' + Math.random().toString(36).slice(2, 8)
+    const subResult: any = await withTimeout(
+      (rpcEvent as any).sub({ event: 'ctrl-a', clientId: forged }), TEST_TIMEOUT, 'RPC $sub')
+    report('RPC: $sub answers for the session the credential vouches for, not the payload id',
+      subResult?.subscribed === true && subResult?.clientId === rpcEvent.clientId && subResult?.clientId !== forged,
+      `server ${subResult?.clientId} vs forged ${forged}`)
+
     let ctrlHits = 0
     // `backendEventable` emits as `(toolName, ...payload)`, matching the unit suite.
     const ctrlP = new Promise<any>(resolve => rpcEvent.on('ctrl-a', (name: string, data: any) => {

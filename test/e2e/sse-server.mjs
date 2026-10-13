@@ -30,8 +30,8 @@ import { fileURLToPath } from 'node:url'
 
 // Self-reference through the package name: Node resolves it via the package's own
 // `exports`, which is the same entry a consumer would import.
-import { EventServer, SseServerPubSubTransport } from '@isdk/tool-event'
-import { ServerTools, HttpServerToolTransport } from '@isdk/tool-rpc'
+import { EventServer, SseServerPubSubTransport, sseCredentialReader } from '@isdk/tool-event'
+import { HttpServerToolTransport, RpcSessionIdentityPolicy } from '@isdk/tool-rpc'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const projectRoot = path.resolve(__dirname, '../..')
@@ -178,7 +178,12 @@ const channel = new SimpleSSEChannel()
 //
 // `EventServer.list` is a stream method, so GET /api/rpc/event is served as the
 // client's EventSource stream and every $sub/$unsub/$publish is an RPC call.
-const ctrlTransport = new SseServerPubSubTransport()
+// One identity policy for both planes: the stream request and the $sub/$unsub/$publish
+// calls that follow it are resolved by this same instance against the same credential.
+// `sseCredentialReader` is what lets it see the resume credential the stream hands back
+// in the URL (EventSource cannot set headers).
+const identity = new RpcSessionIdentityPolicy()
+const ctrlTransport = new SseServerPubSubTransport({ revoke: (id) => identity.revoke(id) })
 EventServer.setPubSubTransport(ctrlTransport)
 const ctrlEventServer = new EventServer('event')
 ctrlEventServer.register()
@@ -188,6 +193,11 @@ ctrlEventServer.register()
 const ctrlSessions = new Set()
 ctrlTransport.onConnection((s) => ctrlSessions.add(s))
 ctrlTransport.onDisconnect((s) => ctrlSessions.delete(s))
+
+// The same tool, mounted by a transport with **no identity policy** (see the second RPC
+// server at the bottom of this file). It exists so the browser suite can assert the
+// documented refusal: with no server-decided id to key a session on, `EventServer.list`
+// answers 401 instead of opening a stream under whatever id the client likes.
 
 // MIME types for static files
 const MIME_TYPES = {
@@ -325,6 +335,20 @@ const server = http.createServer((req, res) => {
     return
   }
 
+  // Control-plane introspection: GET /api/ctrl/clients
+  // The live control-plane sessions with the subscription lists the channel holds for
+  // them. A delivery failure is a different bug depending on which side dropped the
+  // subscription, and this is the only way the browser suite can tell them apart.
+  if (pathname === '/api/ctrl/clients' && req.method === 'GET') {
+    const live = [...((ctrlTransport.channel?.clients) ?? new Map()).values()]
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({
+      sessions: ctrlSessions.size,
+      clients: live.map(c => ({ clientId: c.clientId, events: (c.events ?? []).map(String) })),
+    }))
+    return
+  }
+
   // Control-plane disconnect: POST /api/ctrl/disconnect
   // Ends every control-plane SSE response. The EventSource treats a completed stream
   // as a dropped connection and reconnects after the `retry:` interval, carrying
@@ -395,9 +419,16 @@ const PORT = Number(process.env.SSE_PORT || 3099)
 const RPC_PORT = Number(process.env.RPC_PORT || PORT + 1)
 const RPC_API_ROOT = `http://localhost:${RPC_PORT}/api/rpc/`
 
-const rpc = new HttpServerToolTransport()
+const rpc = new HttpServerToolTransport({ identity, credentialReader: sseCredentialReader })
+// Discovery is a built-in tool (`rpcApis`) served on the RPC prefix: no handler to add.
 rpc.addRpcHandler(RPC_API_ROOT)
-rpc.addDiscoveryHandler(RPC_API_ROOT, () => ServerTools.toJSON())
+
+// The no-policy mount. Its own listen address: two transports cannot share one port.
+const ANON_RPC_PORT = RPC_PORT + 1
+const anonEventServer = new EventServer('anon')
+anonEventServer.register()
+const anonRpc = new HttpServerToolTransport()
+anonRpc.addRpcHandler(`http://localhost:${ANON_RPC_PORT}/api/anon/`)
 
 server.listen(PORT, () => {
   console.log(`🚀 E2E test server running at http://localhost:${PORT}`)
@@ -406,12 +437,14 @@ server.listen(PORT, () => {
 })
 
 await rpc.start({ port: RPC_PORT })
+await anonRpc.start({ port: ANON_RPC_PORT })
 console.log(`🛰 RPC control plane at ${RPC_API_ROOT}`)
 console.log(`   discovery: GET  /api/rpc/   rpc: POST /api/rpc/<tool>`)
 console.log(`   event stream: GET /api/rpc/event`)
+console.log(`🚫 no-policy mount at http://localhost:${ANON_RPC_PORT}/api/anon/ (stream must be refused)`)
 
 function shutdown() {
-  rpc.stop(true).finally(() => process.exit(0))
+  Promise.all([rpc.stop(true), anonRpc.stop(true)]).finally(() => process.exit(0))
   setTimeout(() => process.exit(0), 2000).unref()
 }
 process.on('SIGINT', shutdown)

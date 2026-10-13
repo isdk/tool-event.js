@@ -1,5 +1,5 @@
 /**
- * Unit tests for SSEChannel's Last-Event-ID history replay.
+ * Unit tests for SSEChannel: history replay and session identity.
  *
  * A reconnecting EventSource reports the last id it saw in the `last-event-id`
  * header, and the channel replays the matching history before the stream goes live
@@ -10,14 +10,16 @@
  * The channel is driven with minimal req/res stand-ins — `connect` only needs
  * `headers`, `url`, `socket.setNoDelay`, `on('close')`, `writeHead`, `write` and `end`.
  *
- * The second suite covers session identity: who a connecting request belongs to is
- * decided by an injectable policy, and the default one issues a credential so a
- * dropped connection resumes the session it had — clientId and subscription list —
- * instead of landing on a brand-new one.
+ * Session identity is decided by tool-rpc's `RpcIdentityPolicy`, once per request, in the
+ * transport pipeline — never by the channel. These tests stand in for that pipeline with
+ * `resolveSSEIdentity` and hand the result to `connect`, which pins the division: the
+ * policy vouches for the credential, the channel's resume window decides whether the
+ * session behind it is still alive.
  */
 import { describe, it, expect, afterEach } from 'vitest';
+import { RPC_HEADERS, RpcSessionIdentityPolicy } from '@isdk/tool-rpc';
 import { SSEChannel } from '../src/utils/sse-channel';
-import { createSSEIdentity, type SSEIdentityPolicy } from '../src/utils/sse-identity';
+import { resolveSSEIdentity } from '../src/utils/sse-identity';
 import { SseServerPubSubTransport } from '../src/transports/pubsub/sse-server';
 import { sleep, waitFor } from './utils/wait';
 
@@ -70,7 +72,7 @@ describe('SSEChannel Last-Event-ID replay', () => {
     const ch = new SSEChannel({ pingInterval: 0, rewind: 0 })
     channel = ch
     const firstRes = makeRes()
-    ch.connect(makeReq(), firstRes, ['keep'])
+    ch.connect(makeReq(), firstRes, ['keep'], { id: 's1' })
 
     // The welcome frame is published through the same path, so it is id 1.
     const welcomeId = ch.messages[0].id
@@ -79,7 +81,7 @@ describe('SSEChannel Last-Event-ID replay', () => {
 
     // Reconnect reporting the welcome id: both publishes are replay candidates.
     const replayRes = makeRes()
-    ch.connect(makeReq(welcomeId), replayRes, ['keep'])
+    ch.connect(makeReq(welcomeId), replayRes, ['keep'], { id: 's2' })
     const body = replayRes.chunks.join('')
 
     expect(body).toContain('retry:')
@@ -92,7 +94,7 @@ describe('SSEChannel Last-Event-ID replay', () => {
   it('records the event name on the history entry the replay filter reads', () => {
     const ch = new SSEChannel({ pingInterval: 0, rewind: 0 })
     channel = ch
-    ch.connect(makeReq(), makeRes(), ['keep'])
+    ch.connect(makeReq(), makeRes(), ['keep'], { id: 's1' })
     ch.publish({ n: 1 }, 'keep')
 
     // messages[0] is the welcome frame; the publish below is the next record.
@@ -103,13 +105,13 @@ describe('SSEChannel Last-Event-ID replay', () => {
     const ch = new SSEChannel({ pingInterval: 0, rewind: 0 })
     channel = ch
     const firstRes = makeRes()
-    ch.connect(makeReq(), firstRes)
+    ch.connect(makeReq(), firstRes, undefined, { id: 's1' })
     const welcomeId = ch.messages[0].id
     ch.publish({ n: 1 }, 'keep')
     ch.publish({ n: 2 }, 'skip')
 
     const replayRes = makeRes()
-    ch.connect(makeReq(welcomeId), replayRes)
+    ch.connect(makeReq(welcomeId), replayRes, undefined, { id: 's2' })
     const body = replayRes.chunks.join('')
 
     expect(body).toContain('event: keep')
@@ -125,33 +127,43 @@ describe('SSEChannel session identity', () => {
     channel = undefined
   })
 
-  const open = (ch: SSEChannel, res = makeRes(), events?: string[], clientId?: string) =>
-    ch.connect(makeReq('/stream'), res, events, clientId)
+  /**
+   * What the RPC transport does per request: resolve the identity once, then open the
+   * stream with it. `url` carries the resume credential the way EventSource must.
+   */
+  const openWith = async (policy: RpcSessionIdentityPolicy, ch: SSEChannel, url: string, res = makeRes(), events?: string[]) => {
+    const req = makeReq(url)
+    const identity = await resolveSSEIdentity(policy, { req })
+    return { client: ch.connect(req, res, events, identity), identity }
+  }
 
-  it('issues the session id from the server and hands back a resume credential', () => {
+  it('issues the session id from the server and hands back a resume credential', async () => {
+    const policy = new RpcSessionIdentityPolicy()
     const ch = new SSEChannel({ pingInterval: 0, rewind: 0 })
     channel = ch
     const res = makeRes()
-    const client = open(ch, res, ['keep'])
+    const { client } = await openWith(policy, ch, '/stream', res, ['keep'])
     const welcome = readWelcome(res)
 
     expect(welcome.clientId).toBe(client.clientId)
     expect(typeof welcome.sessionToken, 'the welcome frame carries the credential the client presents on reconnect').toBe('string')
   })
 
-  it('never adopts a clientId the client asks for', () => {
+  it('refuses to open a stream it has no identity for', () => {
     const ch = new SSEChannel({ pingInterval: 0, rewind: 0 })
     channel = ch
-    // The id a `$sub`/`$publish` call is matched on must not be client-selectable.
-    const client = open(ch, makeRes(), ['keep'], 'client-chosen-id')
-    expect(client.clientId).not.toBe('client-chosen-id')
+    // The channel must not fall back to minting an id of its own: that would put a second
+    // identity decision on a request the RPC transport already decided.
+    expect(() => ch.connect(makeReq(), makeRes(), ['keep'])).toThrow(/requires a resolved identity/)
+    expect(ch.clients.size).toBe(0)
   })
 
-  it('resumes the same session on reconnect, keeping subscriptions added after the first connect', () => {
+  it('resumes the same session on reconnect, keeping subscriptions added after the first connect', async () => {
+    const policy = new RpcSessionIdentityPolicy()
     const ch = new SSEChannel({ pingInterval: 0, rewind: 0 })
     channel = ch
     const firstRes = makeRes()
-    const first = open(ch, firstRes, ['keep'])
+    const { client: first } = await openWith(policy, ch, '/stream', firstRes, ['keep'])
     const token = readWelcome(firstRes).sessionToken
 
     // Subscribed after the stream URL was frozen, so the reconnect URL cannot carry it.
@@ -159,68 +171,73 @@ describe('SSEChannel session identity', () => {
     ch.disconnect(first) // the connection drops
 
     const replayRes = makeRes()
-    const second = ch.connect(makeReq(`/stream?events=keep&session_token=${token}`), replayRes, ['keep'])
+    const { client: second } = await openWith(policy, ch, `/stream?events=keep&session_token=${token}`, replayRes, ['keep'])
 
     expect(second.clientId, 'a drop must not change the session id').toBe(first.clientId)
     expect(eventNames(ch.getClient(second.clientId)?.events), 'the list from the reconnect URL is merged, not a replacement').toEqual(['keep', 'late'])
   })
 
-  it('does not resurrect an event the client unsubscribed', () => {
+  it('does not resurrect an event the client unsubscribed', async () => {
+    const policy = new RpcSessionIdentityPolicy()
     const ch = new SSEChannel({ pingInterval: 0, rewind: 0 })
     channel = ch
     const firstRes = makeRes()
-    const first = open(ch, firstRes, ['keep', 'gone'])
+    const { client: first } = await openWith(policy, ch, '/stream', firstRes, ['keep', 'gone'])
     const token = readWelcome(firstRes).sessionToken
 
     ch.unsubscribe(first.clientId, ['gone'])
     ch.disconnect(first)
 
     // The reconnect URL still lists 'gone' — it is frozen at the first connect.
-    const second = ch.connect(makeReq(`/stream?events=keep,gone&session_token=${token}`), makeRes(), ['keep', 'gone'])
+    const { client: second } = await openWith(policy, ch, `/stream?events=keep,gone&session_token=${token}`, makeRes(), ['keep', 'gone'])
     expect(eventNames(ch.getClient(second.clientId)?.events)).toEqual(['keep'])
   })
 
-  it('keeps a session with no subscription list subscribed to nothing', () => {
+  it('keeps a session with no subscription list subscribed to nothing', async () => {
+    const policy = new RpcSessionIdentityPolicy()
     const ch = new SSEChannel({ pingInterval: 0, rewind: 0 })
     channel = ch
     const res = makeRes()
-    const first = open(ch, res)
+    const { client: first } = await openWith(policy, ch, '/stream', res)
     const token = readWelcome(res).sessionToken
     ch.disconnect(first)
 
-    const second = ch.connect(makeReq(`/stream?session_token=${token}`), makeRes())
+    const { client: second } = await openWith(policy, ch, `/stream?session_token=${token}`)
     expect(second.clientId).toBe(first.clientId)
     expect(ch.getClient(second.clientId)?.events, 'a session subscribed to nothing must not gain the URL list').toBeUndefined()
   })
 
-  it('resumes the same session across several drops within the window', () => {
+  it('resumes the same session across several drops within the window', async () => {
+    const policy = new RpcSessionIdentityPolicy()
     const ch = new SSEChannel({ pingInterval: 0, rewind: 0 })
     channel = ch
     const res = makeRes()
-    const first = open(ch, res, ['keep'])
+    const { client: first } = await openWith(policy, ch, '/stream', res, ['keep'])
     const token = readWelcome(res).sessionToken
 
     let current = first
     for (let drop = 0; drop < 3; drop++) {
       ch.disconnect(current)
-      current = ch.connect(makeReq(`/stream?events=keep&session_token=${token}`), makeRes(), ['keep'])
+      current = (await openWith(policy, ch, `/stream?events=keep&session_token=${token}`, makeRes(), ['keep'])).client
       expect(current.clientId, `drop ${drop + 1} must resume the same session`).toBe(first.clientId)
     }
   })
 
-  it('reports a session it knows nothing about as not resumable', () => {
+  it('reports a session it knows nothing about as not resumable', async () => {
+    const policy = new RpcSessionIdentityPolicy()
     const ch = new SSEChannel({ pingInterval: 0, rewind: 0 })
     channel = ch
     expect(ch.isResumable('never-connected')).toBe(false)
-    const client = open(ch, makeRes(), ['keep'])
+    const { client } = await openWith(policy, ch, '/stream', makeRes(), ['keep'])
     expect(ch.isResumable(client.clientId)).toBe(true)
   })
 
-  it('replays from the last event id a resumed stream reports in the URL', () => {
+  it('replays from the last event id a resumed stream reports in the URL', async () => {
+    const policy = new RpcSessionIdentityPolicy()
     const ch = new SSEChannel({ pingInterval: 0, rewind: 0 })
     channel = ch
     const firstRes = makeRes()
-    const first = open(ch, firstRes, ['keep'])
+    const { client: first } = await openWith(policy, ch, '/stream', firstRes, ['keep'])
     const token = readWelcome(firstRes).sessionToken
     const welcomeId = ch.messages[0].id
 
@@ -230,18 +247,19 @@ describe('SSEChannel session identity', () => {
 
     // A resumed stream is a new EventSource and cannot set the `last-event-id` header.
     const replayRes = makeRes()
-    ch.connect(makeReq(`/stream?events=keep&session_token=${token}&last_event_id=${welcomeId}`), replayRes, ['keep'])
+    await openWith(policy, ch, `/stream?events=keep&session_token=${token}&last_event_id=${welcomeId}`, replayRes, ['keep'])
     const body = replayRes.chunks.join('')
 
     expect(body).toContain('"n":1')
     expect(body).not.toContain('"n":2')
   })
 
-  it('prefers the last-event-id header over the URL form', () => {
+  it('prefers the last-event-id header over the URL form', async () => {
+    const policy = new RpcSessionIdentityPolicy()
     const ch = new SSEChannel({ pingInterval: 0, rewind: 0 })
     channel = ch
     const firstRes = makeRes()
-    const first = open(ch, firstRes, ['keep'])
+    const { client: first } = await openWith(policy, ch, '/stream', firstRes, ['keep'])
     const token = readWelcome(firstRes).sessionToken
     const welcomeId = ch.messages[0].id
 
@@ -253,107 +271,104 @@ describe('SSEChannel session identity', () => {
     const replayRes = makeRes()
     const req = makeReq(`/stream?events=keep&session_token=${token}&last_event_id=9999`)
     req.headers['last-event-id'] = String(welcomeId)
-    ch.connect(req, replayRes, ['keep'])
+    const identity = await resolveSSEIdentity(policy, { req })
+    ch.connect(req, replayRes, ['keep'], identity)
     const body = replayRes.chunks.join('')
 
     expect(body).toContain('"n":1')
     expect(body).toContain('"n":2')
   })
 
-  it('never lets a forged credential select a session', () => {
+  it('never lets a forged credential select a session', async () => {
+    const policy = new RpcSessionIdentityPolicy()
     const ch = new SSEChannel({ pingInterval: 0, rewind: 0 })
     channel = ch
     const firstRes = makeRes()
-    const first = open(ch, firstRes, ['keep'])
+    const { client: first } = await openWith(policy, ch, '/stream', firstRes, ['keep'])
     ch.disconnect(first)
 
-    const second = ch.connect(makeReq('/stream?events=keep&session_token=FORGED'), makeRes(), ['keep'])
+    // The policy vouches for credentials it issued; a forged one resolves to a new
+    // identity, so the channel has no session to resume.
+    const { client: second } = await openWith(policy, ch, '/stream?events=keep&session_token=FORGED', makeRes(), ['keep'])
     expect(second.clientId).not.toBe(first.clientId)
   })
 
-  it('closes the resume window, after which a reconnect starts a new session', async () => {
+  it('closes the resume window, after which a reconnect keeps the id but not the session state', async () => {
+    // The credential is still good (the policy's ttl is the default 30s): it is the
+    // channel's resume window that expired. The id belongs to the policy, so it does not
+    // change — what the window closes is the resume itself: the subscription list the
+    // session died with, and the replay from it.
+    const policy = new RpcSessionIdentityPolicy()
     const ch = new SSEChannel({ pingInterval: 0, rewind: 0, resumeWindow: 20 })
     channel = ch
     const res = makeRes()
-    const first = open(ch, res, ['keep'])
-    const token = readWelcome(res).sessionToken
+    const { client: first, identity } = await openWith(policy, ch, '/stream', res, ['keep'])
     ch.disconnect(first)
 
     await sleep(30)
-    const second = ch.connect(makeReq(`/stream?events=keep&session_token=${token}`), makeRes(), ['keep'])
-    expect(second.clientId).not.toBe(first.clientId)
+    const second = ch.connect(makeReq('/stream?events=fresh'), makeRes(), ['fresh'], identity)
+    expect(second.clientId, 'the id is the policy\'s; the window cannot change it').toBe(first.clientId)
+    expect(eventNames(ch.getClient(second.clientId)?.events), 'the window closed, so the URL list is the list').toEqual(['fresh'])
   })
 
-  it('honours the credential expiry and use limit of the injected policy', async () => {
-    const ch = new SSEChannel({ pingInterval: 0, rewind: 0, identity: createSSEIdentity({ ttlMs: 15, maxUses: 1 }) })
-    channel = ch
-    const res = makeRes()
-    const first = open(ch, res, ['keep'])
-    const token = readWelcome(res).sessionToken
-    ch.disconnect(first)
-
-    // The single allowed use resumes the session...
-    const second = ch.connect(makeReq(`/stream?events=keep&session_token=${token}`), makeRes(), ['keep'])
-    expect(second.clientId).toBe(first.clientId)
-    ch.disconnect(second)
-
-    // ...and the next presentation of the same credential does not.
-    const third = ch.connect(makeReq(`/stream?events=keep&session_token=${token}`), makeRes(), ['keep'])
-    expect(third.clientId).not.toBe(first.clientId)
-
-    // Expiry path: a fresh session, credential presented after its ttl.
-    const liveRes = makeRes()
-    const live = open(ch, liveRes, ['keep'])
-    const liveToken = readWelcome(liveRes).sessionToken
-    ch.disconnect(live)
-    await sleep(25)
-    const expired = ch.connect(makeReq(`/stream?events=keep&session_token=${liveToken}`), makeRes(), ['keep'])
-    expect(expired.clientId).not.toBe(live.clientId)
-  })
-
-  it('lets an injected policy decide the identity, with no credential required', () => {
-    const calls: string[] = []
-    const identity: SSEIdentityPolicy = {
-      name: 'fixed',
-      resolve: () => { calls.push('resolve'); return undefined },
-      issue: () => { calls.push('issue'); return 'fixed-session-id' },
-    }
-    const ch = new SSEChannel({ pingInterval: 0, rewind: 0, identity })
-    channel = ch
-    const res = makeRes()
-    const client = open(ch, res, ['keep'])
-
-    expect(client.clientId).toBe('fixed-session-id')
-    expect(calls).toContain('issue')
-    expect(readWelcome(res).sessionToken, 'a policy without credentials issues none').toBeUndefined()
-  })
-
-  it('revokes every credential when the channel is reset', () => {
+  it('honours the credential expiry of the policy', async () => {
+    const policy = new RpcSessionIdentityPolicy({ ttlMs: 15 })
     const ch = new SSEChannel({ pingInterval: 0, rewind: 0 })
     channel = ch
     const res = makeRes()
-    const first = open(ch, res, ['keep'])
+    const { client: first } = await openWith(policy, ch, '/stream', res, ['keep'])
+    const token = readWelcome(res).sessionToken
+    ch.disconnect(first)
+
+    await sleep(25)
+    const { client: expired } = await openWith(policy, ch, `/stream?events=keep&session_token=${token}`, makeRes(), ['keep'])
+    expect(expired.clientId, 'a credential presented after its ttl vouches for nothing').not.toBe(first.clientId)
+  })
+
+  it('lets a policy that issues no credential open a stream with nothing to resume', async () => {
+    const policy = {
+      name: 'fixed',
+      match: () => undefined,
+      assign: () => ({ id: 'fixed-session-id' }),
+    }
+    const ch = new SSEChannel({ pingInterval: 0, rewind: 0 })
+    channel = ch
+    const res = makeRes()
+    const req = makeReq('/stream')
+    const client = ch.connect(req, res, ['keep'], await resolveSSEIdentity(policy, { req }))
+
+    expect(client.clientId).toBe('fixed-session-id')
+    expect(readWelcome(res).sessionToken, 'a policy without credentials issues none').toBeUndefined()
+  })
+
+  it('revokes every credential when the channel is reset', async () => {
+    const policy = new RpcSessionIdentityPolicy()
+    const ch = new SSEChannel({ pingInterval: 0, rewind: 0, revoke: (id: string) => policy.revoke(id) })
+    channel = ch
+    const res = makeRes()
+    const { client: first } = await openWith(policy, ch, '/stream', res, ['keep'])
     const token = readWelcome(res).sessionToken
     ch.disconnect(first)
 
     ch.active = false // resets the channel, clearing clients and resumable sessions
     ch.active = true
-    const second = ch.connect(makeReq(`/stream?events=keep&session_token=${token}`), makeRes(), ['keep'])
+    const { client: second } = await openWith(policy, ch, `/stream?events=keep&session_token=${token}`, makeRes(), ['keep'])
     expect(second.clientId, 'a reset channel must not be resumable').not.toBe(first.clientId)
   })
 
-  it('gives a session one live stream: a second connection carrying the credential takes it over', () => {
+  it('gives a session one live stream: a second connection carrying the credential takes it over', async () => {
+    const policy = new RpcSessionIdentityPolicy()
     const ch = new SSEChannel({ pingInterval: 0, rewind: 0 })
     channel = ch
     const firstRes = makeRes()
-    const first = open(ch, firstRes, ['keep'])
+    const { client: first } = await openWith(policy, ch, '/stream', firstRes, ['keep'])
     const token = readWelcome(firstRes).sessionToken
 
     const closed: string[] = []
     firstRes.end = () => { closed.push('first') }
 
     const secondRes = makeRes()
-    const second = ch.connect(makeReq(`/stream?events=keep&session_token=${token}`), secondRes, ['keep'])
+    const { client: second } = await openWith(policy, ch, `/stream?events=keep&session_token=${token}`, secondRes, ['keep'])
 
     expect(second.clientId, 'the second connection resumes the same session').toBe(first.clientId)
     expect(closed, 'the stream that lost the takeover is closed').toEqual(['first'])
@@ -367,47 +382,53 @@ describe('SSEChannel session identity', () => {
     expect(secondRes.chunks.join(''), 'the live stream receives the publish').toContain('"n":1')
   })
 
-  it('mints a new session once the credential has used up its allowed presentations', () => {
+  it('mints a new session once the credential has used up its allowed presentations', async () => {
     // The use limit counts *presentations* (the issuing connect mints, it does not
     // present), so it bounds how far one credential can carry a session across drops.
-    const ch = new SSEChannel({ pingInterval: 0, rewind: 0, identity: createSSEIdentity({ maxUses: 1 }) })
+    const policy = new RpcSessionIdentityPolicy({ maxUses: 1 })
+    const ch = new SSEChannel({ pingInterval: 0, rewind: 0 })
     channel = ch
     const res = makeRes()
-    const first = open(ch, res, ['keep'])
+    const { client: first } = await openWith(policy, ch, '/stream', res, ['keep'])
     const token = readWelcome(res).sessionToken
 
-    const second = ch.connect(makeReq(`/stream?events=keep&session_token=${token}`), makeRes(), ['keep'])
+    const { client: second } = await openWith(policy, ch, `/stream?events=keep&session_token=${token}`, makeRes(), ['keep'])
     expect(second.clientId, 'within the limit the credential resumes its session').toBe(first.clientId)
 
-    const third = ch.connect(makeReq(`/stream?events=keep&session_token=${token}`), makeRes(), ['keep'])
+    const { client: third } = await openWith(policy, ch, `/stream?events=keep&session_token=${token}`, makeRes(), ['keep'])
     expect(third.clientId, 'past the limit the credential vouches for nothing').not.toBe(first.clientId)
     expect(ch.clients.size, 'the exhausted credential opened a second live session, it did not take the first over').toBe(2)
     expect([...ch.clients.keys()].sort(), 'both sessions are live under their own id').toEqual([first.clientId, third.clientId].sort())
   })
 
   it('ends the stream at maxStreamDuration and leaves the session resumable', async () => {
+    const policy = new RpcSessionIdentityPolicy()
     const ch = new SSEChannel({ pingInterval: 0, rewind: 0, maxStreamDuration: 30, resumeWindow: 5000 })
     channel = ch
     const res = makeRes()
     let ended = false
     res.end = () => { ended = true; res.writableEnded = true }
-    const first = open(ch, res, ['keep'])
+    const { client: first } = await openWith(policy, ch, '/stream', res, ['keep'])
     const token = readWelcome(res).sessionToken
 
     await waitFor(() => ended, { timeout: 2000, label: 'the stream time limit ended the stream' })
     expect(ch.getClient(first.clientId), 'the timed-out stream is no longer live').toBeUndefined()
 
-    const second = ch.connect(makeReq(`/stream?events=keep&session_token=${token}`), makeRes(), ['keep'])
+    const { client: second } = await openWith(policy, ch, `/stream?events=keep&session_token=${token}`, makeRes(), ['keep'])
     expect(second.clientId, 'a stream ended by the time limit resumes the same session').toBe(first.clientId)
   })
 })
 
 describe('SseServerPubSubTransport session takeover', () => {
-  it('keeps the live session when the stream it replaced reports close', () => {
+  it('keeps the live session when the stream it replaced reports close', async () => {
+    const policy = new RpcSessionIdentityPolicy()
     const transport = new SseServerPubSubTransport({ channelOptions: { pingInterval: 0, rewind: 0 } })
     const req1 = makeReq('/api/rpc/event')
     const res1 = makeRes()
-    const first = transport.connect({ req: req1, res: res1, events: ['keep'] })
+    const first = transport.connect({
+      req: req1, res: res1, events: ['keep'],
+      identity: await resolveSSEIdentity(policy, { req: req1 }),
+    })
     const token = readWelcome(res1).sessionToken
 
     const disconnected: string[] = []
@@ -415,7 +436,10 @@ describe('SseServerPubSubTransport session takeover', () => {
 
     const req2 = makeReq(`/api/rpc/event?session_token=${token}`)
     const res2 = makeRes()
-    const second = transport.connect({ req: req2, res: res2, events: ['keep'] })
+    const second = transport.connect({
+      req: req2, res: res2, events: ['keep'],
+      identity: await resolveSSEIdentity(policy, { req: req2 }),
+    })
 
     expect(second.clientId).toBe(first.clientId)
 
@@ -423,10 +447,74 @@ describe('SseServerPubSubTransport session takeover', () => {
     // the session the live stream owns, or `$sub` would find no session to subscribe.
     req1.fire('close')
     expect(disconnected, 'a stale close must not fire the disconnect callback').toEqual([])
-    expect(transport.getSessionFromReq({ headers: { 'rpc-client-id': String(second.clientId) } } as any)).toBe(second)
+    expect(transport.getSessionFromIdentity(second.clientId)).toBe(second)
 
     req2.fire('close')
     expect(disconnected).toEqual([second.clientId])
-    expect(transport.getSessionFromReq({ headers: { 'rpc-client-id': String(second.clientId) } } as any)).toBeUndefined()
+    expect(transport.getSessionFromIdentity(second.clientId)).toBeUndefined()
+  })
+
+  it('keys the session on the resolved identity, never on a client-supplied id', async () => {
+    const policy = new RpcSessionIdentityPolicy()
+    const transport = new SseServerPubSubTransport({ channelOptions: { pingInterval: 0, rewind: 0 } })
+    const req = makeReq('/api/rpc/event')
+    const identity = await resolveSSEIdentity(policy, { req })
+
+    const session = transport.connect({ req, res: makeRes(), events: ['keep'], identity, clientId: 'client-chosen-id' })
+
+    expect(session.clientId, 'the id a `$sub`/`$publish` call is matched on is not client-selectable').toBe(identity.id)
+    expect(session.identity, 'the session carries the identity it was resolved to').toEqual(identity)
+    expect(transport.getSessionFromIdentity('client-chosen-id')).toBeUndefined()
+  })
+
+  it('refuses a stream request the transport resolved no identity for', () => {
+    const transport = new SseServerPubSubTransport({ channelOptions: { pingInterval: 0, rewind: 0 } })
+    expect(() => transport.connect({ req: makeReq('/api/rpc/event'), res: makeRes(), events: ['keep'] }))
+      .toThrow(/requires an identity policy/)
+  })
+
+  it('looks a session up by the identity id, and still honours the deprecated header read', async () => {
+    const policy = new RpcSessionIdentityPolicy()
+    const transport = new SseServerPubSubTransport({ channelOptions: { pingInterval: 0, rewind: 0 } })
+    const req = makeReq('/api/rpc/event')
+    const identity = await resolveSSEIdentity(policy, { req })
+    const session = transport.connect({ req, res: makeRes(), events: ['keep'], identity })
+
+    expect(transport.getSessionFromIdentity(identity.id)).toBe(session)
+    expect(transport.getSessionFromIdentity(undefined), 'no identity, no session').toBeUndefined()
+
+    // Deprecated, and kept working on purpose: a caller that has not migrated to
+    // `ctx.identity` still resolves, it just resolves through the header the identity
+    // policy exists to stop trusting.
+    const caller = makeReq('/api/rpc/event')
+    caller.headers[RPC_HEADERS.CLIENT_ID] = session.clientId
+    expect(transport.getSessionFromReq(caller)).toBe(session)
+    expect(transport.getSessionFromReq(makeReq('/api/rpc/event')), 'a call that names no id matches nothing').toBeUndefined()
+  })
+
+  it('passes the revoke option to the channel, so a reset drops the credentials it issued', async () => {
+    const policy = new RpcSessionIdentityPolicy()
+    const revoked: string[] = []
+    const transport = new SseServerPubSubTransport({
+      channelOptions: { pingInterval: 0, rewind: 0 },
+      revoke: (id) => { revoked.push(id); policy.revoke(id) },
+    })
+    const req = makeReq('/api/rpc/event')
+    const res = makeRes()
+    const session = transport.connect({ req, res, events: ['keep'], identity: await resolveSSEIdentity(policy, { req }) })
+    const token = readWelcome(res).sessionToken
+
+    // The channel is the transport's private business; the reset is exactly what the
+    // option is for, so this test reaches for it rather than widening the public surface.
+    const channel = (transport as any).channel
+    channel.active = false
+    expect(revoked, 'a reset channel revokes every credential it handed out').toEqual([session.clientId])
+    channel.active = true
+
+    // With the credential revoked, the reconnect vouches for nothing and gets its own
+    // session — the reset channel is not resumable.
+    const req2 = makeReq(`/api/rpc/event?session_token=${token}`)
+    const second = transport.connect({ req: req2, res: makeRes(), events: ['keep'], identity: await resolveSSEIdentity(policy, { req: req2 }) })
+    expect(second.clientId).not.toBe(session.clientId)
   })
 })

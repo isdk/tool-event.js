@@ -1,3 +1,4 @@
+import type { RpcIdentity } from '@isdk/tool-rpc';
 import type { PubSubCtx } from './base';
 
 /**
@@ -24,6 +25,13 @@ export interface PubSubServerSession {
    * The protocol being used for this session (e.g., 'sse', 'ws', 'ipc').
    */
   protocol: 'sse' | 'ws' | 'ipc' | string;
+  /**
+   * The identity the RPC transport's policy resolved for the request that opened this
+   * session. `id` is what the session is keyed on, and `attributes` carries whatever the
+   * policy attached (tenant, scopes). Present on transports that sit behind the RPC
+   * transport; a session without one cannot be addressed by `$sub`/`$publish`.
+   */
+  identity?: RpcIdentity;
   /**
    * Sends an event and data to the client associated with this session.
    * @param event The name of the event to send.
@@ -69,14 +77,20 @@ export interface IPubSubServerTransport {
    * For protocols like SSE, initial events can be passed to be subscribed to at connection time.
    *
    * @param options A container for transport-specific parameters, including optional initial events.
+   *   `identity` is the session this request belongs to, as decided by the RPC transport's
+   *   `RpcIdentityPolicy` (`ctx.identity` on the call that opened the stream). A
+   *   client-supplied `clientId` is not adopted — that is what keeps `$sub`/`$publish`
+   *   from being aimed at someone else's session.
    * @returns A `PubSubServerSession` object representing the newly connected client session.
    */
   connect: (
     options?: {
       req: any; // e.g., http.IncomingMessage
       res: any; // e.g., http.ServerResponse
+      /** @deprecated Self-reported id; never adopted. Use `identity`. */
       clientId?: PubSubClientId;
       events?: string[];
+      identity?: RpcIdentity;
       [k: string]: any;
     }
   ) => PubSubServerSession;
@@ -156,11 +170,22 @@ export interface IPubSubServerTransport {
   ) => void;
 
   /**
+   * Optional. Finds the session belonging to an identity the policy resolved — the
+   * lookup `$sub`, `$unsub` and `$publish` should use (`ctx.identity.id`).
+   *
+   * Preferred over `getSessionFromReq`, which reads a header the client wrote.
+   */
+  getSessionFromIdentity?: (identityId: PubSubClientId) => PubSubServerSession | undefined;
+
+  /**
    * Optional. Finds and returns a session based on a request object.
    * This is used by higher-level tools to find the correct session
    * for operations like adding a subscription via a generic RPC call.
    * @param req The request object (e.g., http.IncomingMessage or Electron.IpcMainEvent).
    * @returns The corresponding session, or undefined if not found.
+   * @deprecated The request carries a self-reported `rpc-client-id`; an identity policy
+   * exists precisely so that value cannot select a session. Implement
+   * `getSessionFromIdentity` instead.
    */
   getSessionFromReq?: (req: any) => PubSubServerSession | undefined;
 }

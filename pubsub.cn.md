@@ -152,20 +152,23 @@ graph TD
 
 ```typescript
 // 在服务端入口文件（例如 server.ts）中
-import { EventServer, eventServer, SseServerPubSubTransport } from '@isdk/tool-event';
-import { ServerTools, HttpServerToolTransport } from '@isdk/tool-rpc';
+import { EventServer, eventServer, SseServerPubSubTransport, sseCredentialReader } from '@isdk/tool-event';
+import { HttpServerToolTransport, RpcSessionIdentityPolicy } from '@isdk/tool-rpc';
 
 async function main() {
+  // 两面共用一个身份策略：流请求本身就是一次普通 RPC 调用，所以传输层上的策略既决定这条
+  // 流是谁，也决定后续 `$sub`/`$publish` 来自谁
+  const identity = new RpcSessionIdentityPolicy();
+
   // **关键步骤：为服务端设置 PubSub 传输**
-  EventServer.setPubSubTransport(new SseServerPubSubTransport());
+  EventServer.setPubSubTransport(new SseServerPubSubTransport({ revoke: (id) => identity.revoke(id) }));
 
   // 注册 eventServer 工具实例
   eventServer.register();
 
-  const serverTransport = new HttpServerToolTransport();
-  // 注册 RPC 与发现（discovery）处理器
+  const serverTransport = new HttpServerToolTransport({ identity, credentialReader: sseCredentialReader });
+  // 发现（discovery）是挂在 RPC 前缀上的内置工具（`rpcApis`）：无需再注册
   serverTransport.addRpcHandler('/api');
-  serverTransport.addDiscoveryHandler('/api', () => ServerTools.toJSON());
 
   // ... 启动服务端
   await serverTransport.start({port: 3000})
@@ -244,35 +247,51 @@ console.log(eventClient.clientId) // 服务端分配，且跟随会话
 
 ### 身份策略
 
-一个接入请求属于谁，是一项策略，而不是一个常量。它是可注入的，因此外部鉴权协议是通过**替换**策略
-接入的——事件协议本身不做任何改动。
+一个接入请求属于谁，由 tool-rpc 的 `RpcIdentityPolicy` 决定，**每请求一次，在 RPC 传输层**：SSE 流本身就
+是一次那样的请求（`EventServer.list`），因此流与后续的 `$sub`/`$unsub`/`$publish` 由同一个策略实例、对同一
+张凭证解析。外部鉴权协议通过**替换**该策略接入；事件协议本身不做任何改动。
+
+对流而言这个策略不是可选项：传输层没有解析出身份时，`EventServer.list` 会以 401 拒绝开流
+（`SSE_IDENTITY_REQUIRED_MESSAGE`）——没有服务端定的 id 可以定位会话，而客户端自带的 `clientId` 永不被采用。
 
 ```typescript
-import { SseServerPubSubTransport, type SSEIdentityPolicy } from '@isdk/tool-event';
+import { RpcSessionIdentityPolicy } from '@isdk/tool-rpc';
+import { sseCredentialReader } from '@isdk/tool-event';
 
+const identity = new RpcSessionIdentityPolicy({ ttlMs: 30_000 });
+const serverTransport = new HttpServerToolTransport({ identity, credentialReader: sseCredentialReader });
 EventServer.setPubSubTransport(new SseServerPubSubTransport({
-  identity: myIdentityPolicy, // 例如：校验由您的鉴权服务签发的 token
+  revoke: (id) => identity.revoke(id), // 通道重置时抹掉该会话的凭证
 }))
 ```
 
 ```typescript
-interface SSEIdentityPolicy {
-  readonly name: string
-  /** 若请求出示了有效凭证，则返回它正在续传的会话 id。 */
-  resolve: (ctx: { req: IncomingMessage }) => string | undefined
-  /** 为一次全新连接生成会话 id。 */
-  issue: (ctx: { req: IncomingMessage }) => string
-  /** 在 `welcome` 中交还的凭证。省略它即关闭续传。 */
-  credential?: (clientId: string) => string | undefined
-  /** 丢弃某客户端的凭证，例如其流被彻底关闭时。 */
-  revoke?: (clientId: string) => void
+interface RpcIdentityPolicy<Req = any> {
+  readonly name?: string
+  /** 该请求出示的凭证若为本策略签发，则返回其身份。 */
+  match: (ctx: RpcIdentityContext<Req>) => RpcIdentity | undefined | Promise<RpcIdentity | undefined>
+  /** 为新请求生成身份——连同它的 `credential`，即 `welcome` 交还的内容。 */
+  assign: (ctx: RpcIdentityContext<Req>) => RpcIdentity | Promise<RpcIdentity>
+  /** 丢弃某身份的凭证，例如其会话彻底结束时。 */
+  revoke?: (identityId: string) => void | Promise<void>
 }
 ```
 
-默认策略（`SSETokenIdentityPolicy`，由 `createSSEIdentity` 构建）在服务端生成会话 id，并发出一个
-与之绑定的不透明 token：重连时出示一个已签发的 token 即可续传该会话；而服务端从未签发过的 token
-解析结果为空——因此伪造的 id/token 永远选不到任何会话。它接受 `{ ttlMs: 30_000, maxUses: 5 }`；
-每次凭证被出示，TTL 都会向前滑动（闲置的凭证会过期，活跃的不会），而重新签发**故意不会**重置使用次数。
+两件事仍归传输层，因为 tool-rpc 有意不去命名它们：凭证的**wire 形态**（`sseCredentialReader` 读的
+`session_token` query / `rpc-session-token` header，以及 `welcome` 里的 `sessionToken` 键），以及
+**会话活性**（通道的 `resumeWindow`）。策略装在传输层并指向 `sseCredentialReader`，两面才认同一张凭证；
+留着默认 reader，流上的 query 凭证对策略就是不可见的，每次重连都是新会话。
+
+**跨域部署要自己放行这个请求头。** 控制面调用把凭证放在自定义请求头 `rpc-session-token` 里，而浏览器
+只有在服务端把它列进 `Access-Control-Allow-Headers`（并正确应答 preflight）之后才会带上自定义头；
+RPC 前缀前面的反向代理也要透传该头。这条失败是静默的：流照常工作（凭证走 `session_token` query，
+CORS 管不到），而每个 `$sub` / `$unsub` / `$publish` 到达时不带凭证，各自解析成一个新会话。
+同源部署（包括示例用的 dev-server 代理）什么都不用做。
+
+默认策略（`RpcSessionIdentityPolicy`）在服务端生成 id，并发出一个与之绑定的不透明 token：重连时出示一个
+已签发的 token 即可续传该会话；而服务端从未签发过的 token 解析结果为空——伪造的 id/token 永远选不到会话。
+它接受 `{ ttlMs: 30_000 }`；每次凭证被出示，TTL 都会向前滑动（闲置的凭证会过期，活跃的不会）。`maxUses`
+建议不设：控制面与数据面共用一张凭证后，每个 `$sub` 都是一次出示，设上限会把凭证花在 RPC 调用上。
 
 ### 续传调优
 
@@ -280,8 +299,10 @@ interface SSEIdentityPolicy {
 因此一次 publish 对每个 `clientId` 只投递一份。通道选项通过 `channelOptions` 传入：
 
 ```typescript
+// 策略的选项在策略上，通道的选项在传输层上。
+const identity = new RpcSessionIdentityPolicy({ ttlMs: 60_000 });
 EventServer.setPubSubTransport(new SseServerPubSubTransport({
-  tokenIdentity: { ttlMs: 60_000, maxUses: 10 }, // 默认策略的选项
+  revoke: (id) => identity.revoke(id),
   channelOptions: { resumeWindow: 30_000, maxStreamDuration: 30_000, historySize: 100 },
 }))
 ```
@@ -295,8 +316,10 @@ EventServer.setPubSubTransport(new SseServerPubSubTransport({
 | `clientRetryInterval` | 1000 | 发给客户端的 `retry:` 提示。 |
 | `rewind` | 0 | 向*新*客户端发送的历史消息条数。 |
 
-> ⚠️ **凭证不是鉴权 token。**它只标识一个会话，仅此而已。鉴权始终在事件协议之外：外部鉴权协议是
-> 替换策略，而不是扩展策略。
+> ⚠️ **续用凭证只与签发它的策略一样强。**装了 `credentialReader: sseCredentialReader` 后，它就是两面共同
+> 接受的那张凭证，因此值得当作凭证看待：`RpcSessionIdentityPolicy` 签发的随机不透明 token 只标识一个身份；
+> 而一个校验鉴权服务签名 token 的策略，会把租户与 scope 带在 `identity.attributes` 里。两种情况下鉴权都在
+> 事件协议之外——外部鉴权协议是替换策略，而不是扩展策略。
 
 ## 示例：用 Electron IPC 构建实时桌面应用
 
@@ -417,7 +440,6 @@ export type ElectronApi = typeof electronApi;
 ```typescript
 // main.ts
 import { EventServer, eventServer } from '@isdk/tool-event';
-import { ServerTools } from '@isdk/tool-rpc';
 import {
   IpcServerToolTransport,
   ElectronServerPubSubTransport,
@@ -431,7 +453,7 @@ const pubSubUrl = 'electron://my-app-events';
 // 这会为 'my-app:discover' 与 'my-app:rpc' 注册处理器。
 const rpcTransport = new IpcServerToolTransport({ apiUrl: rpcUrl });
 rpcTransport.addRpcHandler(rpcUrl);
-rpcTransport.addDiscoveryHandler(rpcUrl, () => ServerTools.toJSON());
+// 发现是挂在 RPC 命名空间上的内置工具（`rpcApis`）：无需再注册
 await rpcTransport.start();
 console.log(`[Main] RPC transport started on ${rpcTransport.getListenAddr()}`);
 
@@ -622,8 +644,8 @@ eventBus.on('client:user-action', (data, meta) => {
 });
 ```
 
-> `sender` 是会话对象，因此当这次请求没有可解析的会话时它是 `undefined`（没有
-> `getSessionFromReq` 的传输，或不曾经由任何流到达的调用）。读取 `clientId` 之前请先做判空。
+> `sender` 是会话对象，因此当这次请求没有可解析的会话时它是 `undefined`（`getSessionFromIdentity` 与
+> `getSessionFromReq` 都没实现的传输，或不曾经由任何流到达的调用）。读取 `clientId` 之前请先做判空。
 
 ### 订阅、监听与发布（客户端）
 
@@ -796,7 +818,13 @@ export interface IPubSubServerTransport {
   ) => void;
 
   /**
-   * 可选。根据请求对象查找并返回会话。
+   * 查找属于“RPC 传输层的策略为本次请求解析出的那个身份”的会话（`ctx.identity.id`）。`$sub`、`$unsub`
+   * 与 `$publish` 应当走这个查找：id 由服务端定，客户端无法把自己的调用指向别人的会话。
+   */
+  getSessionFromIdentity?: (identityId?: string) => PubSubServerSession | undefined;
+
+  /**
+   * @deprecated 读的是请求自带的 id，而身份策略存在的理由正是不再信任它。仅为不装策略的传输保留。
    */
   getSessionFromReq?: (req: any) => PubSubServerSession | undefined;
 }

@@ -40,6 +40,8 @@ const keepOtherWarnings =
   }
 const baseLogger = createLogger()
 
+const RPC_PORT = Number(process.env.RPC_PORT || Number(process.env.SSE_PORT || 3099) + 1)
+
 export default defineConfig({
   customLogger: {
     ...baseLogger,
@@ -76,7 +78,10 @@ export default defineConfig({
     // server sends no CORS headers, so the page reaches it through this proxy and
     // stays same-origin.
     proxy: {
-      '/api/rpc': `http://localhost:${Number(process.env.RPC_PORT || Number(process.env.SSE_PORT || 3099) + 1)}`,
+      '/api/rpc': `http://localhost:${RPC_PORT}`,
+      // The no-identity mount (sse-server.mjs) runs on the port above the RPC plane, so
+      // the page can ask it for a stream and read the refusal without tripping CORS.
+      '/api/anon': `http://localhost:${RPC_PORT + 1}`,
     },
   },
 })

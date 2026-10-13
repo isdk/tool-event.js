@@ -82,19 +82,25 @@ The client-side SSE transport uses [`eventsource`](https://github.com/EventSourc
 The library exports a pre-instantiated instance of the `EventServer` class named `eventServer`. The tool name for this instance is defined by the exported constant `EventName` (whose value is `'event'`).
 
 ```typescript
-import { EventServer, eventServer, SseServerPubSubTransport } from '@isdk/tool-event';
-import { ServerTools, HttpServerToolTransport } from '@isdk/tool-rpc';
+import { EventServer, eventServer, SseServerPubSubTransport, sseCredentialReader } from '@isdk/tool-event';
+import { HttpServerToolTransport, RpcSessionIdentityPolicy } from '@isdk/tool-rpc';
+
+// One identity policy for both planes. The stream is an ordinary RPC call, so the policy
+// on the transport decides who the stream is *and* who its `$sub`/`$publish` calls come
+// from; `sseCredentialReader` lets it read the resume credential the stream hands back in
+// the URL, since EventSource cannot set headers.
+const identity = new RpcSessionIdentityPolicy();
 
 // 1. Set up the server-side SSE transport (SSE is a built-in protocol)
-EventServer.setPubSubTransport(new SseServerPubSubTransport());
+EventServer.setPubSubTransport(new SseServerPubSubTransport({ revoke: (id) => identity.revoke(id) }));
 
 // 2. Register the pre-instantiated EventServer instance (default name is 'event')
 eventServer.register();
 
-// 3. Start the HTTP server with RPC and discovery handlers
-const server = new HttpServerToolTransport();
+// 3. Start the HTTP server. Discovery is a built-in tool (`rpcApis`) served on the RPC
+//    prefix, so there is no separate discovery handler to add.
+const server = new HttpServerToolTransport({ identity, credentialReader: sseCredentialReader });
 server.addRpcHandler('/api');
-server.addDiscoveryHandler('/api', () => ServerTools.toJSON());
 await server.start({ port: 3000 });
 
 console.log('Event server started at: http://localhost:3000/api');
@@ -207,7 +213,7 @@ The library elegantly abstracts a stateful, persistent connection (like SSE) int
 
 - **Getting the Event Stream**: When a client needs to subscribe to an event for the first time, the `EventClient` makes a request to `GET /api/event` (which is the `list` method of the `EventServer`). The response to this request is a persistent stream of type `text/event-stream`. The server assigns a unique UUID as the `clientId` and sends it back in a `welcome` event. Conceptually, this is equivalent to "getting" a resource that represents the real-time event flow.
 
-- **Session Identity and Resume**: The `welcome` event carries the server-assigned `clientId` plus a resume credential (`sessionToken`). Who a connection belongs to is decided by an injectable policy (`SSEIdentityPolicy`), defaulting to server-issued opaque tokens — so a client can never pick the id its `$sub`/`$publish` calls are matched on. When the connection drops, the client re-opens the stream carrying that credential and resumes the same session: same `clientId`, same subscription list, replay from the last event it saw. Replay covers everything published since the id the client last acknowledged (within the channel's history buffer, `historySize`), filtered by the resumed session's subscription list — so messages published while the connection was down arrive too. Authentication stays outside the event protocol — an external auth protocol replaces the policy, it does not extend it.
+- **Session Identity and Resume**: The `welcome` event carries the server-assigned `clientId` plus a resume credential (`sessionToken`). Who a connection belongs to is decided by tool-rpc's `RpcIdentityPolicy` on the RPC transport — the stream is one of its requests, so the stream and the calls that follow it resolve to one identity — defaulting to `RpcSessionIdentityPolicy`'s server-issued opaque tokens. A client can never pick the id its `$sub`/`$publish` calls are matched on. When the connection drops, the client re-opens the stream carrying that credential and resumes the same session: same `clientId`, same subscription list, replay from the last event it saw. Replay covers everything published since the id the client last acknowledged (within the channel's history buffer, `historySize`), filtered by the resumed session's subscription list — so messages published while the connection was down arrive too. Authentication stays outside the event protocol — an external auth protocol replaces the policy, it does not extend it.
 
 - **Managing the Event Stream**: Subsequent actions like `subscribe` and `publish` can be seen as modifications to the state of this "resource," and they are handled through separate, conventional RPC requests.
 
@@ -400,13 +406,20 @@ console.log(eventClient.clientId); // server-assigned, and it follows the sessio
 // and replay of the messages the client had not acknowledged.
 ```
 
-Who a connecting request belongs to is an injectable policy (`SSEIdentityPolicy`): `resolve` (credential → session), `issue` (id for a fresh connection), `credential` (what `welcome` hands back), `revoke` (when a session is gone). The default issues server-side opaque tokens with a TTL and a use limit; an external auth protocol plugs in by replacing the policy, not by extending the event protocol.
+Who a connecting request belongs to is decided by tool-rpc's `RpcIdentityPolicy` — the one installed on the RPC transport, since the stream request goes through that pipeline:
 
 ```typescript
+// Same policy instance for the stream and for the calls that follow it.
+const identity = new RpcSessionIdentityPolicy({ ttlMs: 30_000 });
+const server = new HttpServerToolTransport({ identity, credentialReader: sseCredentialReader });
 EventServer.setPubSubTransport(new SseServerPubSubTransport({
-  identity: myIdentityPolicy, // e.g. verify a signed token issued by your auth service
+  revoke: (id) => identity.revoke(id), // the channel reset drops that session's credential
 }));
 ```
+
+`match` (credential → identity) runs once per request; `assign` mints a fresh session, and its `credential` is what `welcome` hands back. The default policy issues server-side opaque tokens with a sliding TTL and no use limit — every `$sub` is a presentation of that credential, so a use cap would spend it. An external auth protocol plugs in by replacing the policy (`match` may be async: JWKS, a database), not by extending the event protocol. Without a policy the stream cannot open: there is no server-decided id to key the session on, so `list` answers 401.
+
+**Cross-origin deployments have to allow the credential's header.** The control-plane calls present it as `rpc-session-token`, a custom header the browser sends only once the server lists it in `Access-Control-Allow-Headers` (and answers the preflight); a reverse proxy in front of the RPC prefix must forward it too. The stream itself is unaffected — it carries the credential in the `session_token` query — so a missing header fails quietly: every control-plane call resolves to a fresh session. Same-origin setups, including the dev-server proxy the examples use, need nothing extra.
 
 Replay covers everything published since the id the client last acknowledged, as long as it is still in the channel's history buffer (`historySize`, default 100) and matches the session's subscription list — including messages published *while* the session was down.
 
@@ -427,6 +440,7 @@ To do this, you need to implement the `IPubSubServerTransport` interface. Here i
 ```typescript
 // transports/WebSocketServerTransport.ts
 import { WebSocketServer } from 'ws';
+import type { RpcIdentity } from '@isdk/tool-rpc';
 import type { IPubSubServerTransport, PubSubServerSession } from '@isdk/tool-event';
 
 export class WebSocketServerTransport implements IPubSubServerTransport {
@@ -441,8 +455,11 @@ export class WebSocketServerTransport implements IPubSubServerTransport {
   constructor(options: { port: number }) {
     this.wss = new WebSocketServer({ port: options.port });
 
-    this.wss.on('connection', (ws) => {
-      const clientId = uuid(); // Generate a unique ID
+    this.wss.on('connection', (ws, req) => {
+      // The id is minted server-side and never taken from the client. A transport behind
+      // the RPC transport keys on the id its identity policy resolved for the upgrade
+      // request; one that stands alone mints its own and keeps the mapping private.
+      const clientId = uuid();
       const session: PubSubServerSession = {
         id: clientId,
         clientId,
@@ -468,15 +485,16 @@ export class WebSocketServerTransport implements IPubSubServerTransport {
     });
   }
 
-  connect(options?: { req?: any; res?: any; clientId?: string; events?: string[] }) {
+  connect(options?: { req?: any; res?: any; events?: string[]; identity?: RpcIdentity }) {
     // WebSocket connections are handled in the constructor; this method is for
     // protocols like SSE that need to create a connection from an HTTP request.
     throw new Error('WebSocket transport uses its own connection lifecycle.');
   }
 
-  getSessionFromReq(req: any): PubSubServerSession | undefined {
-    // Extract clientId from request headers
-    return this.sessions.get(req.headers['x-client-id']);
+  // The lookup `$sub`/`$unsub`/`$publish` go through: the id the identity policy resolved
+  // for this request (`ctx.identity.id`), which a client cannot choose.
+  getSessionFromIdentity(identityId?: string): PubSubServerSession | undefined {
+    return identityId ? this.sessions.get(identityId) : undefined;
   }
 
   subscribe(session: PubSubServerSession, events: string[]) {

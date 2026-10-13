@@ -4,9 +4,10 @@ import { waitFor } from './utils/wait';
 import { EventEmitter } from 'events-ex';
 
 import { ToolFunc, Funcs } from '@isdk/tool-func';
-import { HttpServerToolTransport, HttpClientToolTransport, ResClientTools, ResServerTools, RpcActiveTaskTracker, RpcServerDispatcher, RpcTransportManager } from '@isdk/tool-rpc';
+import { HttpServerToolTransport, HttpClientToolTransport, ResClientTools, ResServerTools, RpcActiveTaskTracker, RpcServerDispatcher, RpcTransportManager, RpcSessionIdentityPolicy } from '@isdk/tool-rpc';
 import { EventServer } from '../src/event-server';
 import { EventClient } from '../src/event-client';
+import { sseCredentialReader } from '../src/utils';
 
 import { SseClientPubSubTransport, SseServerPubSubTransport } from "../src/transports/pubsub"
 
@@ -45,11 +46,13 @@ describe('EventTransport End-to-End Test', () => {
     apiRoot = `http://localhost:${port}/api/`;
 
     const tracker = new RpcActiveTaskTracker()
-    const dispatcher = new RpcServerDispatcher({ registry: ResServerTools.items, tracker })
+    // The class, not `.items`: built-in discovery (`rpcApis`) lists a prefix via the registry's
+    // `toJSON()`, which only the tool class has — a raw items map would list nothing.
+    const dispatcher = new RpcServerDispatcher({ registry: ResServerTools, tracker })
 
-    serverTransport = new HttpServerToolTransport({ apiUrl: apiRoot, dispatcher });
+    const identity = new RpcSessionIdentityPolicy();
+    serverTransport = new HttpServerToolTransport({ apiUrl: apiRoot, dispatcher, identity, credentialReader: sseCredentialReader });
     serverTransport.addRpcHandler(apiRoot);
-    serverTransport.addDiscoveryHandler(apiRoot, () => ResServerTools.toJSON());
 
     await serverTransport.start({ port, host: 'localhost' });
 
@@ -58,7 +61,7 @@ describe('EventTransport End-to-End Test', () => {
     await EventClient.loadFrom();
 
     EventClient.setPubSubTransport(new SseClientPubSubTransport())
-    EventServer.setPubSubTransport(new SseServerPubSubTransport())
+    EventServer.setPubSubTransport(new SseServerPubSubTransport({ revoke: (id) => identity.revoke(id) }))
   });
 
   afterAll(async () => {

@@ -97,15 +97,19 @@ import { SseClientPubSubTransport } from '@isdk/tool-event/transports/pubsub/bro
 ### Server
 
 ```typescript
-import { EventServer, eventServer, SseServerPubSubTransport } from '@isdk/tool-event';
-import { ServerTools, HttpServerToolTransport } from '@isdk/tool-rpc';
+import { EventServer, eventServer, SseServerPubSubTransport, sseCredentialReader } from '@isdk/tool-event';
+import { HttpServerToolTransport, RpcSessionIdentityPolicy } from '@isdk/tool-rpc';
 
-EventServer.setPubSubTransport(new SseServerPubSubTransport());
+// One policy for both planes: the stream request is an ordinary RPC call, so the policy
+// on the transport decides the stream's identity and the caller of `$sub`/`$publish`.
+const identity = new RpcSessionIdentityPolicy();
+
+EventServer.setPubSubTransport(new SseServerPubSubTransport({ revoke: (id) => identity.revoke(id) }));
 eventServer.register();
 
-const server = new HttpServerToolTransport();
+// Discovery is a built-in tool (`rpcApis`) on the RPC prefix: no discovery handler to add.
+const server = new HttpServerToolTransport({ identity, credentialReader: sseCredentialReader });
 server.addRpcHandler('/api');
-server.addDiscoveryHandler('/api', () => ServerTools.toJSON());
 await server.start({ port: 3000 });
 
 // Broadcast to all subscribed clients:
@@ -212,21 +216,25 @@ eventBus.on('client:ui-click', (data, meta) => {
 EventServer.publish('private-msg', { text: 'hi' }, { clientId: 'xxx' });
 ```
 
-## SSE Session Identity (injectable policy)
+## Session Identity (tool-rpc's `RpcIdentityPolicy`)
 
-Who a connecting request belongs to is decided by `SSEIdentityPolicy` (`src/utils/sse-identity.ts`), injected via `new SseServerPubSubTransport({ identity })` or `new SSEChannel({ identity })`:
+Identity is decided **once per request, by the RPC transport** — the SSE stream is an ordinary RPC call (`EventServer.list`), so the stream and the `$sub`/`$unsub`/`$publish` calls that follow it are resolved by the same policy instance against the same credential. `src/utils/sse-identity.ts` keeps only the SSE wire layer: where the credential rides (`session_token` query / `rpc-session-token` header), where the resume id rides (`last_event_id` query), the `sessionToken` key inside `welcome`, and `sseCredentialReader`, the reader that makes one credential visible to both planes.
 
 ```typescript
-interface SSEIdentityPolicy {
-  readonly name: string
-  resolve: (ctx: { req }) => string | undefined   // session a valid credential resumes
-  issue: (ctx: { req }) => string                  // id for a fresh connection
-  credential?: (clientId: string) => string | undefined  // handed back in `welcome`
-  revoke?: (clientId: string) => void
-}
+const identity = new RpcSessionIdentityPolicy({ ttlMs: 30_000 }); // match / assign / revoke
+const server = new HttpServerToolTransport({ identity, credentialReader: sseCredentialReader });
+EventServer.setPubSubTransport(new SseServerPubSubTransport({ revoke: (id) => identity.revoke(id) }));
 ```
 
-The default (`createSSEIdentity()`) mints server-issued opaque tokens with a TTL and a use limit, so a dropped connection resumes its session — same `clientId`, same subscriptions, replay from the last event id — and a credential the server never issued resolves to nothing. A client-supplied `clientId` is never adopted. Replay covers everything published since the id the client last acknowledged (within the channel's `historySize` buffer, filtered by the resumed session's subscriptions) — messages published while the session was down arrive too. An external auth protocol plugs in by replacing this policy; `EventServer`/`EventClient` do not change.
+Rules an integrator has to keep:
+
+- The policy goes on the transport, **not** on the channel. `SSEChannel.connect(req, res, events, identity)` consumes `ctx.identity`; it never resolves one, because a second `match` would spend the credential twice and could pick a different session than the control plane did. A bare `http` mount (no RPC transport) calls `resolveSSEIdentity(policy, { req })` itself.
+- `credentialReader: sseCredentialReader` is required. With tool-rpc's default reader (which only knows `authorization`) the stream's query credential is invisible to the policy and every reconnect mints a new session.
+- No policy, no stream: `list` answers 401 (`SSE_IDENTITY_REQUIRED_MESSAGE`), because there is no server-decided id to key the session on. A client-supplied `clientId` is never adopted.
+- `maxUses` stays unset by default: every `$sub` is a presentation of the credential, so a use cap would spend it. Resume is bounded by the policy's sliding `ttlMs` plus the channel's own `resumeWindow`.
+- A **cross-origin** mount must allow the credential's header: `$sub`/`$unsub`/`$publish` present it as `rpc-session-token`, so the server has to list it in `Access-Control-Allow-Headers` (and answer the preflight) and any proxy in front of the prefix has to forward it. The stream is unaffected (its credential rides in the `session_token` query), so a missing header fails quietly — every control-plane call resolves to a fresh session. Same-origin needs nothing.
+
+The default policy mints server-issued opaque tokens with a sliding TTL, so a dropped connection resumes its session — same `clientId`, same subscriptions, replay from the last event id — and a credential the server never issued resolves to nothing. Replay covers everything published since the id the client last acknowledged (within the channel's `historySize` buffer, filtered by the resumed session's subscriptions) — messages published while the session was down arrive too. An external auth protocol plugs in by replacing the policy (`match` may be async); `EventServer`/`EventClient` do not change.
 
 A session has one live stream: a connection resuming a session whose stream is still live takes it over (the replaced stream is closed), so a publish is delivered once per `clientId`. Resume is shaped by three `SSEChannel` options, passed via `new SseServerPubSubTransport({ channelOptions })`: `resumeWindow` (bounds the resume; reopened at every drop, `0` disables it), `maxStreamDuration` (the server ends the stream on a timer — a drop like any other, it opens the window), `historySize` (replay depth).
 
@@ -238,13 +246,17 @@ Implement `IPubSubServerTransport`:
 interface IPubSubServerTransport {
   readonly name: string;
   readonly protocol: string;
-  connect(options?: { req, res, clientId?, events? }): PubSubServerSession;
+  connect(options?: { req, res, clientId?, events?, identity? }): PubSubServerSession;
   subscribe(session: PubSubServerSession, events: string[]): void;
   unsubscribe(session: PubSubServerSession, events: string[]): void;
   publish(event: string, data: any, target?: { clientId?: string|string[] }, ctx?: PubSubCtx): void;
   onConnection(cb: (session: PubSubServerSession) => void): void;
   onDisconnect(cb: (session: PubSubServerSession) => void): void;
   onMessage?(cb: (session, event, data, ctx?) => void): void;
+  // The lookup `$sub`/`$unsub`/`$publish` should use: keyed on `ctx.identity.id`.
+  getSessionFromIdentity?(identityId?: string): PubSubServerSession | undefined;
+  // Deprecated: reads the self-reported `rpc-client-id` header, the value a policy exists
+  // to stop trusting. Kept for transports that run with no policy installed.
   getSessionFromReq?(req: any): PubSubServerSession | undefined;
 }
 ```
@@ -268,3 +280,6 @@ interface IPubSubClientTransport {
 5. ❌ **Registering `EventServer('event')` when `eventServer` already exists** → Use different name
 6. ❌ **Client `subscribe()` before `register()`** → Register first
 7. ❌ **Expecting client events to reach server bus without `autoInjectToLocalBus`** → Default is `false`
+8. ❌ **Serving the SSE stream with no identity policy on the transport** → `list` answers 401; add `identity: new RpcSessionIdentityPolicy()`
+9. ❌ **Policy installed but default `credentialReader`** → the stream's `session_token` is invisible to it, so every reconnect is a new session; pass `credentialReader: sseCredentialReader`
+10. ❌ **Calling `addDiscoveryHandler`** → discovery is the built-in `rpcApis` tool on the RPC prefix now; a custom listing is a route with your own `toolId`

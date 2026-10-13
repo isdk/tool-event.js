@@ -1,20 +1,18 @@
-import { RPC_HEADERS } from '@isdk/tool-rpc';
+import { RPC_HEADERS, RpcError, RpcStatusCode, type RpcIdentity } from '@isdk/tool-rpc';
 import { SSEChannel } from '../../utils/sse-channel';
-import { createSSEIdentity, type SSEIdentityPolicy, type SSETokenIdentityOptions } from '../../utils/sse-identity';
 import type { IPubSubServerTransport, PubSubClientId, PubSubServerSession } from './server';
 import type { IncomingMessage, ServerResponse } from 'http';
 
 export interface SseServerPubSubTransportOptions {
   /**
-   * How a connecting request is matched to a session. Defaults to server-issued
-   * tokens, which let a dropped connection resume the same session (same clientId,
-   * same subscription list). Inject a policy to plug in another credential scheme —
-   * a signed token, a header an authenticating proxy stamps — without touching
-   * `EventServer` or `EventClient`.
+   * Called with a session id when the channel is reset and that session may no longer be
+   * resumed. Wire it to the identity policy installed on the RPC transport
+   * (`(id) => identity.revoke?.(id)`) so a reset does not leave credentials behind.
+   *
+   * The transport holds no policy of its own: identity is decided once, by the RPC
+   * transport's `RpcIdentityPolicy`, and handed to `connect()` as `ctx.identity`.
    */
-  identity?: SSEIdentityPolicy;
-  /** Options for the default token policy. Ignored when `identity` is injected. */
-  tokenIdentity?: SSETokenIdentityOptions;
+  revoke?: (identityId: string) => void;
   /** Passed through to the underlying `SSEChannel` (pingInterval, resumeWindow, ...). */
   channelOptions?: Record<string, any>;
 }
@@ -22,33 +20,40 @@ export interface SseServerPubSubTransportOptions {
 export class SseServerPubSubTransport implements IPubSubServerTransport {
   readonly name = 'sse';
   readonly protocol = 'sse' as const;
-  /** The session-identity policy in force. See `sse-identity`. */
-  readonly identity: SSEIdentityPolicy;
   private channel: SSEChannel;
+  /** Sessions keyed by the id the identity policy assigned, never by a client-supplied one. */
   private sessions = new Map<PubSubClientId, PubSubServerSession>();
 
   private onConn?: (s: PubSubServerSession) => void;
   private onDis?: (s: PubSubServerSession) => void;
 
   constructor(options: SseServerPubSubTransportOptions = {}) {
-    this.identity = options.identity ?? createSSEIdentity(options.tokenIdentity);
-    this.channel = new SSEChannel({ ...options.channelOptions, identity: this.identity });
+    this.channel = new SSEChannel({ ...options.channelOptions, revoke: options.revoke });
   }
 
-  connect(options?: { req: IncomingMessage; res: ServerResponse; clientId?: string, events?: string[] }): PubSubServerSession {
-    const { req, res, clientId, events } = options ?? {};
+  connect(options?: {
+    req: IncomingMessage;
+    res: ServerResponse;
+    /** Deprecated: a client-supplied id is never adopted. See `identity`. */
+    clientId?: string;
+    events?: string[];
+    /** The session this request belongs to, as decided by the RPC transport (`ctx.identity`). */
+    identity?: RpcIdentity;
+  }): PubSubServerSession {
+    const { req, res, events, identity } = options ?? {};
     if (!req || !res) throw new Error('SSE connect requires options.req and options.res');
+    assertSSEIdentity(identity);
 
-    // Let SSEChannel do its work. The session identity comes from the identity policy
-    // and the server is the issuer — `options.clientId` is not adopted, so a client
-    // cannot pick the id its `$sub`/`$publish` calls will be matched on. A request
-    // presenting a credential the server issued resumes that session.
-    const client = this.channel.connect(req, res, events, clientId);
+    // The channel does its work with the identity the RPC transport resolved for this
+    // request. `options.clientId` is dropped on the floor: adopting it would let a client
+    // pick the id its `$sub`/`$publish` calls are matched on, which is exactly the hole
+    // the identity policy exists to close.
+    const client = this.channel.connect(req, res, events, identity);
 
-    // Create a temporary session to notify the upper layer
     const session: PubSubServerSession = {
       id: client.clientId, // Use the same ID for session and client
       clientId: client.clientId,
+      identity,
       protocol: 'sse',
       send: (event, data) => {
         // Correctly delegate sending to the channel, targeting this specific client
@@ -73,6 +78,19 @@ export class SseServerPubSubTransport implements IPubSubServerTransport {
     return session;
   }
 
+  /**
+   * The session belonging to an identity the policy resolved — the lookup `$sub`,
+   * `$unsub` and `$publish` should use.
+   */
+  getSessionFromIdentity(identityId?: PubSubClientId): PubSubServerSession | undefined {
+    return identityId ? this.sessions.get(identityId) : undefined;
+  }
+
+  /**
+   * @deprecated Reads the self-reported `rpc-client-id` header, which is the value an
+   * identity policy exists to stop trusting. Use `getSessionFromIdentity(ctx.identity.id)`;
+   * with no policy installed, `ctx.clientId` carries the same header value anyway.
+   */
   getSessionFromReq(req: IncomingMessage): PubSubServerSession | undefined {
     const clientId = req.headers[RPC_HEADERS.CLIENT_ID] as string;
     if (clientId) {
@@ -100,4 +118,20 @@ export class SseServerPubSubTransport implements IPubSubServerTransport {
 
   onConnection(cb: (s: PubSubServerSession) => void) { this.onConn = cb; }
   onDisconnect(cb: (s: PubSubServerSession) => void) { this.onDis = cb; }
+}
+
+/**
+ * The error an SSE stream request gets when the RPC transport it is served by has no
+ * identity policy: there is no server-decided id to key the session on, so the stream
+ * cannot be opened. The fix is one line, and it is the line that makes `$sub`/`$publish`
+ * trustworthy too.
+ */
+export const SSE_IDENTITY_REQUIRED_MESSAGE =
+  'The SSE stream requires an identity policy on the RPC transport: '
+  + 'new HttpServerToolTransport({ identity: new RpcSessionIdentityPolicy(), credentialReader: sseCredentialReader })';
+
+export function assertSSEIdentity(identity?: RpcIdentity): asserts identity is RpcIdentity {
+  if (!identity?.id) {
+    throw new RpcError(SSE_IDENTITY_REQUIRED_MESSAGE, RpcStatusCode.UNAUTHENTICATED, 'unauthenticated');
+  }
 }

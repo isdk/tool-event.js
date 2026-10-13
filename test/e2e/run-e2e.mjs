@@ -230,6 +230,14 @@ async function main() {
     console.log('  Failed: ' + failed)
     console.log('  Total:  ' + total + '\n')
 
+    // `--verbose` prints every report line, not just the failures. Debugging a failing
+    // assertion usually means reading the detail of the ones around it.
+    if (argv.includes('--verbose')) {
+      console.log('All Tests:')
+      for (const t of results.tests) console.log('  ' + (t.className.includes('fail') ? 'X ' : '✓ ') + t.name)
+      console.log('')
+    }
+
     const failedTests = results.tests.filter((t) => t.className.includes('fail'))
     if (failedTests.length > 0) {
       console.log('Failed Tests:')

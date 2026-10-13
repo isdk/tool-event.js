@@ -152,20 +152,24 @@ On the server, you must set the desired PubSub transport on the `EventServer` cl
 
 ```typescript
 // In your server entry file (e.g., server.ts)
-import { EventServer, eventServer, SseServerPubSubTransport } from '@isdk/tool-event';
-import { ServerTools, HttpServerToolTransport } from '@isdk/tool-rpc';
+import { EventServer, eventServer, SseServerPubSubTransport, sseCredentialReader } from '@isdk/tool-event';
+import { HttpServerToolTransport, RpcSessionIdentityPolicy } from '@isdk/tool-rpc';
 
 async function main() {
+  // One identity policy for both planes. The stream is an ordinary RPC call, so the
+  // policy on the transport decides who the stream is and who its `$sub`/`$publish`
+  // calls come from.
+  const identity = new RpcSessionIdentityPolicy();
+
   // **Crucial Step: Set the PubSub transport for the server**
-  EventServer.setPubSubTransport(new SseServerPubSubTransport());
+  EventServer.setPubSubTransport(new SseServerPubSubTransport({ revoke: (id) => identity.revoke(id) }));
 
   // Register the eventServer tool instance
   eventServer.register();
 
-  const serverTransport = new HttpServerToolTransport();
-  // Register RPC and discovery handlers
+  const serverTransport = new HttpServerToolTransport({ identity, credentialReader: sseCredentialReader });
+  // Discovery is a built-in tool (`rpcApis`) served on the RPC prefix: nothing to add.
   serverTransport.addRpcHandler('/api');
-  serverTransport.addDiscoveryHandler('/api', () => ServerTools.toJSON());
 
   // ... start server
   await serverTransport.start({port: 3000})
@@ -252,38 +256,64 @@ and replay of every message it had not acknowledged.
 
 ### The identity policy
 
-Who a connecting request belongs to is a policy, not a constant. It is injectable, so
-an external auth protocol plugs in by **replacing** the policy — the event protocol
-itself does not change.
+Who a connecting request belongs to is decided by tool-rpc's `RpcIdentityPolicy`, once
+per request, **in the RPC transport** — the SSE stream is one of those requests
+(`EventServer.list`), so the stream and the `$sub`/`$unsub`/`$publish` calls that follow
+it are resolved by the same policy instance against the same credential. An external
+auth protocol plugs in by **replacing** that policy; the event protocol does not change.
+
+For the stream this policy is not optional: when the transport resolved no identity,
+`EventServer.list` refuses the stream with 401 (`SSE_IDENTITY_REQUIRED_MESSAGE`) — there
+is no server-decided id to key the session on, and a client-supplied `clientId` is never
+adopted.
 
 ```typescript
-import { SseServerPubSubTransport, type SSEIdentityPolicy } from '@isdk/tool-event';
+import { RpcSessionIdentityPolicy } from '@isdk/tool-rpc';
+import { sseCredentialReader } from '@isdk/tool-event';
 
+const identity = new RpcSessionIdentityPolicy({ ttlMs: 30_000 });
+const serverTransport = new HttpServerToolTransport({ identity, credentialReader: sseCredentialReader });
 EventServer.setPubSubTransport(new SseServerPubSubTransport({
-  identity: myIdentityPolicy, // e.g. verify a signed token from your auth service
+  revoke: (id) => identity.revoke(id), // the channel reset drops that session's credential
 }))
 ```
 
 ```typescript
-interface SSEIdentityPolicy {
-  readonly name: string
-  /** The session id this request is resuming, if it presents a valid credential. */
-  resolve: (ctx: { req: IncomingMessage }) => string | undefined
-  /** Mint the session id for a fresh connection. */
-  issue: (ctx: { req: IncomingMessage }) => string
-  /** The credential handed back in `welcome`. Omit it to disable resuming. */
-  credential?: (clientId: string) => string | undefined
-  /** Drop a client's credential(s), e.g. when its stream is closed for good. */
-  revoke?: (clientId: string) => void
+interface RpcIdentityPolicy<Req = any> {
+  readonly name?: string
+  /** The identity this request presents, if its credential is one this policy issued. */
+  match: (ctx: RpcIdentityContext<Req>) => RpcIdentity | undefined | Promise<RpcIdentity | undefined>
+  /** Mint the identity — and its `credential`, handed back in `welcome` — for a fresh request. */
+  assign: (ctx: RpcIdentityContext<Req>) => RpcIdentity | Promise<RpcIdentity>
+  /** Drop an identity's credential, e.g. when its session is gone for good. */
+  revoke?: (identityId: string) => void | Promise<void>
 }
 ```
 
-The default (`SSETokenIdentityPolicy`, built by `createSSEIdentity`) mints the session
-id server-side and issues an opaque token bound to it: a reconnect presenting an issued
-token resumes that session, and a token the server never issued resolves to nothing — so
-a forged id/token never selects one. It takes `{ ttlMs: 30_000, maxUses: 5 }`; the TTL
-slides forward every time the credential is presented (an idle credential lapses, an
-active one does not), and re-issuing deliberately does **not** reset the use count.
+Two things the transport layer still owns, because tool-rpc deliberately does not name
+them: the credential's **wire form** (the `session_token` query / `rpc-session-token`
+header that `sseCredentialReader` reads, and the `sessionToken` key inside `welcome`),
+and **session liveness** (the channel's `resumeWindow`). Install the policy on the
+transport and point it at `sseCredentialReader`, and the two planes recognize one
+credential; leave the default reader in place and the stream's query credential is
+invisible to the policy, so every reconnect mints a new session.
+
+**A cross-origin deployment has to let that header through.** The control-plane calls
+present the credential in the custom request header `rpc-session-token`, and a browser
+sends a custom header only once the server names it in `Access-Control-Allow-Headers`
+and answers the preflight; a reverse proxy in front of the RPC prefix has to forward it
+as well. The failure is quiet: the stream keeps working (it carries the credential in
+the `session_token` query, which no CORS rule touches) while every `$sub` / `$unsub` /
+`$publish` arrives without a credential and resolves to a fresh session of its own.
+Same-origin setups — including the dev-server proxy the examples use — need nothing.
+
+The default (`RpcSessionIdentityPolicy`) mints the id server-side and issues an opaque
+token bound to it: a reconnect presenting an issued token resumes that session, and a
+token the server never issued resolves to nothing — a forged id/token never selects one.
+It takes `{ ttlMs: 30_000 }`; the TTL slides forward every time the credential is
+presented (an idle credential lapses, an active one does not). Leave `maxUses` unset:
+with the control plane and the data plane sharing one credential, every `$sub` is a
+presentation of it, so a use cap would spend it on RPC calls.
 
 ### Tuning resume
 
@@ -292,8 +322,10 @@ session over (the stream it replaces is closed), so a publish is delivered once 
 `clientId`. Channel options are passed through `channelOptions`:
 
 ```typescript
+// Policy options live on the policy; channel options on the transport.
+const identity = new RpcSessionIdentityPolicy({ ttlMs: 60_000 });
 EventServer.setPubSubTransport(new SseServerPubSubTransport({
-  tokenIdentity: { ttlMs: 60_000, maxUses: 10 }, // options for the default policy
+  revoke: (id) => identity.revoke(id),
   channelOptions: { resumeWindow: 30_000, maxStreamDuration: 30_000, historySize: 100 },
 }))
 ```
@@ -307,9 +339,13 @@ EventServer.setPubSubTransport(new SseServerPubSubTransport({
 | `clientRetryInterval` | 1000 | The `retry:` hint sent to clients. |
 | `rewind` | 0 | Number of historical messages sent to *new* clients. |
 
-> ⚠️ **A credential is not an authentication token.** It names a session and nothing
-> more. Authentication stays outside the event protocol: an external auth protocol
-> replaces the policy, it does not extend it.
+> ⚠️ **The resume credential is only as strong as the policy that issued it.** With
+> `credentialReader: sseCredentialReader` it is the credential both planes accept, so it
+> is worth treating as one: a random opaque token from `RpcSessionIdentityPolicy` names an
+> identity and nothing more, while a policy that verifies your auth service's signed token
+> carries the tenant and scopes in `identity.attributes`. Authentication stays outside the
+> event protocol either way — an external auth protocol replaces the policy, it does not
+> extend it.
 
 ## Example: Electron IPC for Real-time Desktop Apps
 
@@ -437,7 +473,6 @@ Here, we set up both the `IpcServerToolTransport` for RPC and the `ElectronServe
 ```typescript
 // main.ts
 import { EventServer, eventServer } from '@isdk/tool-event';
-import { ServerTools } from '@isdk/tool-rpc';
 import {
   IpcServerToolTransport,
   ElectronServerPubSubTransport,
@@ -450,8 +485,8 @@ const pubSubUrl = 'electron://my-app-events';
 // --- 1. Setup IPC for standard RPC ---
 // This sets up handlers for 'my-app:discover' and 'my-app:rpc'.
 const rpcTransport = new IpcServerToolTransport({ apiUrl: rpcUrl });
+// Discovery is a built-in tool (`rpcApis`) on the RPC namespace: nothing to add.
 rpcTransport.addRpcHandler(rpcUrl);
-rpcTransport.addDiscoveryHandler(rpcUrl, () => ServerTools.toJSON());
 await rpcTransport.start();
 console.log(`[Main] RPC transport started on ${rpcTransport.getListenAddr()}`);
 
@@ -644,8 +679,9 @@ eventBus.on('client:user-action', (data, meta) => {
 ```
 
 > `sender` is the session object, so it is `undefined` when the request carried no
-> resolvable session (a transport without `getSessionFromReq`, or a call that did not
-> come through a stream). Guard it before reading `clientId`.
+> resolvable session (a transport that implements neither `getSessionFromIdentity` nor
+> `getSessionFromReq`, or a call that did not come through a stream). Guard it before
+> reading `clientId`.
 
 ### Subscribing, Listening, and Publishing (Client-Side)
 
@@ -835,7 +871,16 @@ export interface IPubSubServerTransport {
   ) => void;
 
   /**
-   * Optional. Finds and returns a session based on a request object.
+   * Finds the session belonging to the identity the RPC transport's policy resolved for
+   * this request (`ctx.identity.id`). This is the lookup `$sub`, `$unsub` and `$publish`
+   * should use: the id is server-decided, so a client cannot aim its calls at someone
+   * else's session.
+   */
+  getSessionFromIdentity?: (identityId?: string) => PubSubServerSession | undefined;
+
+  /**
+   * @deprecated Reads a request-supplied id, which is exactly what the identity policy
+   * exists to stop trusting. Kept for transports that run with no policy installed.
    */
   getSessionFromReq?: (req: any) => PubSubServerSession | undefined;
 }

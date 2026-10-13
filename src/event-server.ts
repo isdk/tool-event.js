@@ -4,7 +4,8 @@ import { type ServerFuncParams, type ToolRpcContext } from '@isdk/tool-rpc';
 import type { Event } from 'events-ex';
 import { ResServerTools } from '@isdk/tool-rpc';
 import { ErrorCode, throwError } from '@isdk/common-error';
-import type { IPubSubServerTransport } from './transports/pubsub/server';
+import type { IPubSubServerTransport, PubSubServerSession } from './transports/pubsub/server';
+import { SSE_IDENTITY_REQUIRED_MESSAGE } from './transports/pubsub/sse-server';
 
 // the singleton instance of event-bus
 const eventBus = event.runSync()
@@ -203,12 +204,48 @@ export class EventServer extends ResServerTools {
     ctor._syncForwards()
   }
 
+  /**
+   * The session a control-plane call belongs to.
+   *
+   * Keyed on the id the identity policy resolved for this request (`ctx.identity.id`), so
+   * a client cannot aim `$sub`/`$unsub`/`$publish` at someone else's session. With no
+   * policy installed `ctx.identity` is undefined and `ctx.clientId` is the self-reported
+   * `rpc-client-id` header — the pre-policy behaviour, kept working but not trustworthy.
+   */
+  protected _sessionFor(ctx?: ToolRpcContext): PubSubServerSession | undefined {
+    const transport = this.pubSubTransport
+    if (!transport) return undefined
+
+    const identityId = ctx?.identity?.id ?? ctx?.clientId
+    if (identityId && transport.getSessionFromIdentity) {
+      return transport.getSessionFromIdentity(identityId)
+    }
+    const req = ctx?.req
+    return req ? transport.getSessionFromReq?.(req) : undefined
+  }
+
+  /** Why a `$sub`/`$unsub` could not be applied to a session: no lookup channel, or no match. */
+  protected _warnNoSession(act: 'sub' | 'unsub', haveContext: boolean) {
+    const transport = this.pubSubTransport!
+    if (!transport.getSessionFromIdentity && !transport.getSessionFromReq) {
+      console.warn(`$${act}: The ${transport.name} Transport does not support dynamic subscription`);
+    } else if (!haveContext) {
+      console.warn(`$${act}: missing req`);
+    } else {
+      console.warn(`$${act}: No session found for request`);
+    }
+  }
+
   list(params: EventServerFuncParams, context?: ToolRpcContext) {
     if (this.pubSubTransport) {
       const ctx = context || this.ctx;
       const req = ctx?.req;
       const res = ctx?.reply;
-      return this.pubSubTransport.connect({ req, res, events: params.event as string[] })
+      // The stream is an ordinary RPC call, so the identity policy has already decided
+      // who this request is. Without a policy there is no server-decided id to key the
+      // session on, and opening the stream would mean trusting a client-supplied one.
+      if (!ctx?.identity?.id) throwError(SSE_IDENTITY_REQUIRED_MESSAGE, 'list', 401)
+      return this.pubSubTransport.connect({ req, res, events: params.event as string[], identity: ctx.identity })
     } else {
       throwError('PubSub transport not available', 'list', ErrorCode.NotImplemented)
     }
@@ -224,19 +261,12 @@ export class EventServer extends ResServerTools {
       this.forward(event);
 
       const ctx = context || this.ctx;
-      const req = ctx?.req;
-      const session = req && this.pubSubTransport.getSessionFromReq?.(req);
+      const session = this._sessionFor(ctx);
       if (session) {
         this.pubSubTransport.subscribe(session, Array.isArray(event) ? event : [event]);
         return { forward: true, subscribed: true, event, clientId: session.clientId };
       } else {
-        if (this.pubSubTransport.getSessionFromReq) {
-          console.warn('$sub: No session found for request');
-        } else if (!req) {
-          console.warn(`$sub: missing req`);
-        } else {
-          console.warn(`$sub: The ${this.pubSubTransport.name} Transport does not support dynamic subscription`);
-        }
+        this._warnNoSession('sub', !!ctx)
         return { forward: true, event };
       }
     } else {
@@ -253,20 +283,13 @@ export class EventServer extends ResServerTools {
     if (event) {
       this.unforward(event);
       const ctx = context || this.ctx;
-      const req = ctx?.req;
-      const session = req && this.pubSubTransport.getSessionFromReq?.(req);
+      const session = this._sessionFor(ctx);
 
       if (session) {
         this.pubSubTransport.unsubscribe(session, Array.isArray(event) ? event : [event]);
         return { forward: false, subscribed: false, event, clientId: session.clientId };
       } else {
-        if (this.pubSubTransport.getSessionFromReq) {
-          console.warn('$unsub: No session found for request');
-        } else if (!req) {
-          console.warn(`$sub: missing req`);
-        } else {
-          console.warn(`$unsub: The ${this.pubSubTransport.name} Transport does not support dynamic subscription`);
-        }
+        this._warnNoSession('unsub', !!ctx)
         return { forward: false, event };
       }
     } else {
@@ -281,8 +304,7 @@ export class EventServer extends ResServerTools {
       // Get the session and clientId from the transport, not from the client payload.
       // This is a critical security measure to prevent impersonation.
       const ctx = context || this.ctx;
-      const req = ctx?.req;
-      const session = req && this.pubSubTransport?.getSessionFromReq?.(req);
+      const session = this._sessionFor(ctx);
       const senderId = session?.clientId;
       const ctor = this.constructor as typeof EventServer;
 
