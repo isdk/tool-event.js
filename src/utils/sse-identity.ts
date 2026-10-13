@@ -91,8 +91,15 @@ export const sseCredentialReader: RpcCredentialReader = (req: any): string | und
   const headers = req?.headers
   const raw = singleHeaderValue(headers, 'authorization') ?? singleHeaderValue(headers, 'Authorization')
   if (raw === undefined) return undefined
-  const match = bearerPattern.exec(raw.trim())
-  return (match ? match[1] : raw).trim() || undefined
+  const value = raw.trim()
+  // A header whose whole value is the scheme carries no credential — same guard as
+  // tool-rpc's bearer reader, so the two readers agree on one request. Without it,
+  // `Bearer` and `Bearer   ` hand `verify` the literal `Bearer`, which is also what a
+  // token that literally *is* `Bearer` looks like: malformed header and real token
+  // become the same value.
+  if (/^bearer$/i.test(value)) return undefined
+  const match = bearerPattern.exec(value)
+  return (match ? match[1] : value).trim() || undefined
 }
 
 /** The credential a `welcome` payload carries, if any. */

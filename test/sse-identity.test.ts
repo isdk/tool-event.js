@@ -79,6 +79,22 @@ describe('sseCredentialReader', () => {
     expect(sseCredentialReader(undefined as any)).toBeUndefined()
     expect(sseCredentialReader({ headers: { authorization: ['a', 'b'] } } as any)).toBeUndefined()
   })
+
+  it('treats a bearer header with an empty token as no credential', () => {
+    // Same rule as tool-rpc's bearer reader: a header whose whole value is the scheme
+    // carries nothing. Reading it as the token `Bearer` would hand `verify` a credential
+    // nobody sent, and leave it indistinguishable from a token that literally is `Bearer`.
+    expect(sseCredentialReader(req('/stream', { authorization: 'Bearer' }))).toBeUndefined()
+    expect(sseCredentialReader(req('/stream', { authorization: 'Bearer   ' }))).toBeUndefined()
+    expect(sseCredentialReader(req('/stream', { Authorization: 'bearer' }))).toBeUndefined()
+    // A token that is the scheme word stays readable, so the two cases remain separable.
+    expect(sseCredentialReader(req('/stream', { authorization: 'Bearer Bearer' }))).toBe('Bearer')
+  })
+
+  it('still prefers the SSE credential over a malformed bearer header', () => {
+    const request = req(`/stream?${SSE_SESSION_TOKEN_QUERY}=sse`, { authorization: 'Bearer' })
+    expect(sseCredentialReader(request)).toBe('sse')
+  })
 })
 
 describe('extractSessionToken', () => {
