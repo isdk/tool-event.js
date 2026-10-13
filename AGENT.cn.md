@@ -231,6 +231,7 @@ EventServer.setPubSubTransport(new SseServerPubSubTransport({ revoke: (id) => id
 - 策略装在传输层，**不是**通道上。`SSEChannel.connect(req, res, events, identity)` 消费 `ctx.identity`，它绝不自己判定：第二次 `match` 会把凭证花两次，还可能选到与控制面不同的会话。不经 RPC 传输层的裸 `http` 挂载，自己调 `resolveSSEIdentity(policy, { req })`。
 - `credentialReader: sseCredentialReader` 是必须的。用 tool-rpc 默认的 reader（只认 `authorization`）时，流上的 query 凭证对策略不可见，每次重连都是新会话。
 - 裸挂载上，`resolveSSEIdentity` 只把 SSE 线形（`session_token` query / `rpc-session-token` header）备到 `ctx.credential`；标准 `authorization` 由策略自己读——写死的，因为 tool-rpc 的策略侧没有可注入的 reader。凭证骑在别的来路上，就得自己以 `ctx.credential` 递进来。
+- `sseCredentialReader` 只负责**自家的凭证在哪里**（先 header、再 query）；`authorization` 那个值怎么解析用的是 tool-rpc 的 `parseBearerCredential`，是 import 不是复制。两个 reader 各解各的，同一个 header 就能给出不同答案——流那次请求和它背地的 `$sub` 就会落到不同身份。找 header 那一段本包保留自己那份（更严）：重复的 header（Node 给的是数组）算**无凭证**，而 tool-rpc 内置 reader 取第一个值。
 - 不装策略就没有流：`list` 返回 401（`SSE_IDENTITY_REQUIRED_MESSAGE`），因为没有服务端定的 id 可以定位会话。客户端自带的 `clientId` 永不采用。
 - `maxUses` 默认不设：每个 `$sub` 都是一次出示，设上限会把凭证提前花完。续用边界由策略的滑动 `ttlMs` 加上通道自己的 `resumeWindow` 兑底。
 - **跨域**挂载必须放行凭证头：`$sub`/`$unsub`/`$publish` 以 `rpc-session-token` 出示凭证，因此服务端要在 `Access-Control-Allow-Headers` 里列出它（并正确应答 preflight），前缀前面的代理也要透传。流不受影响（凭证走 URL 里的 `session_token`），所以缺头是静默失败 —— 每个控制面调用都解析成新会话。同源无需任何配置。

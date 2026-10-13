@@ -1,4 +1,5 @@
 import type { IncomingMessage } from 'http'
+import { parseBearerCredential } from '@isdk/tool-rpc'
 import type {
   RpcCredentialReader,
   RpcIdentity,
@@ -46,8 +47,6 @@ export const SSE_RESUME_LAST_EVENT_QUERY = 'last_event_id'
 /** Key of the credential inside the `welcome` event payload. */
 export const SSE_SESSION_TOKEN_KEY = 'sessionToken'
 
-const bearerPattern = /^Bearer\s+(.+)$/i
-
 /** One header value, ignoring the array Node hands over for a repeated header. */
 function singleHeaderValue(headers: any, name: string): string | undefined {
   const raw = headers?.[name]
@@ -81,25 +80,22 @@ export function readSSESessionCredential(req?: IncomingMessage): string | undefi
  * mints a new session.
  *
  * The `authorization` fallback keeps an externally issued bearer token working under the
- * same reader. (tool-rpc's own bearer reader is package-private, so the one line of
- * RFC 7235 parsing is repeated here rather than reached around.)
+ * same reader. The RFC 7235 parsing of that value is tool-rpc's own
+ * (`parseBearerCredential`), not a copy: two readers that disagree about the same header
+ * would mean the stream request and the RPC calls behind it resolving to different
+ * identities.
  */
 export const sseCredentialReader: RpcCredentialReader = (req: any): string | undefined => {
   const sse = readSSESessionCredential(req)
   if (sse) return sse
 
+  // Where the credential lives is this module's business; what the value means is
+  // tool-rpc's. `singleHeaderValue` stays here on purpose: a repeated header arrives as
+  // an array and must not be coerced into a credential, which is stricter than tool-rpc's
+  // own reader (it takes the first value).
   const headers = req?.headers
   const raw = singleHeaderValue(headers, 'authorization') ?? singleHeaderValue(headers, 'Authorization')
-  if (raw === undefined) return undefined
-  const value = raw.trim()
-  // A header whose whole value is the scheme carries no credential — same guard as
-  // tool-rpc's bearer reader, so the two readers agree on one request. Without it,
-  // `Bearer` and `Bearer   ` hand `verify` the literal `Bearer`, which is also what a
-  // token that literally *is* `Bearer` looks like: malformed header and real token
-  // become the same value.
-  if (/^bearer$/i.test(value)) return undefined
-  const match = bearerPattern.exec(value)
-  return (match ? match[1] : value).trim() || undefined
+  return parseBearerCredential(raw)
 }
 
 /** The credential a `welcome` payload carries, if any. */
