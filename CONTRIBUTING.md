@@ -35,6 +35,8 @@ Anchors: a Chinese heading's anchor drops punctuation, so `### 模式（正则�
 
 Markdown is deliberately outside prettier (see Code Style), which is what keeps the ASCII diagrams intact — the price is that alignment is manual. In a Chinese box each CJK glyph is 2 columns, so pad to display width, not to character count.
 
+References to code point at files and symbols, never at line numbers: write "`EventServer.publishServerEvent()` in `src/event-server.ts`", never that same path with a line number appended. A line number drifts the moment anything above it moves, and a stale one is worse than none — it sends the reader to the wrong code with an air of authority. `tool-rpc`'s hand-written docs accumulated 141 such references, sampled 5–94 lines off, and they were deleted wholesale; a test there (`test/docs-line-refs.test.ts`) now fails the suite on any new one. A claim that really is about one specific line belongs in a test, not in prose.
+
 ## Testing
 
 ```shell
