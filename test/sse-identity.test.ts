@@ -149,10 +149,12 @@ describe('resolveSSEIdentity', () => {
   })
 
   it('lets a refusing policy throw rather than swallow it', async () => {
+    // No reader on the policy: the layer that builds ctx owns where the credential comes
+    // from, and `resolveSSEIdentity` already read the SSE wire form onto `ctx.credential`.
+    // This request carries no credential anywhere, so a refusing policy has to throw.
     const policy = new RpcBearerPolicy({
       verify: () => undefined,
       allowAnonymous: false,
-      credentialReader: sseCredentialReader,
     })
     await expect(resolveSSEIdentity(policy, { req: req('/stream') })).rejects
       .toMatchObject({ code: 401, status: 'unauthenticated' })
