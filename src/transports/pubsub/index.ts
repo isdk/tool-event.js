@@ -1,4 +1,5 @@
 export * from './base'
+export * from './close'
 export * from './client'
 export * from './server'
 export * from './sse-server'

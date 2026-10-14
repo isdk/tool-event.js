@@ -1,6 +1,7 @@
 import { EventSource } from './browser';
 import { IPubSubClientTransport, PubSubClientStream } from './client';
 import { PubSubCtx } from './base';
+import { SSE_CLOSE_EVENT, type PubSubSessionCloseReason } from './close';
 import { genUrlParamsStr } from './gen-url-params';
 import { parseEventData } from '../../utils/sse-payload';
 import { toEventMatcher } from '../../utils/event-pattern';
@@ -29,11 +30,32 @@ import {
  * this transport re-opens the stream carrying it, so the drop resumes the same
  * session — same clientId, same subscription list — instead of starting a new
  * one. Listeners registered on the stream are replayed onto the new connection.
+ *
+ * Server-ended sessions: SSE has no channel of its own, so a server-side
+ * `session.close()` is otherwise indistinguishable from a dropped connection and
+ * gets resumed. With `closeSignal: true` the client honours the `$close` frame the
+ * server sends first: the stream goes CLOSED, `closeReason` reports why, and no
+ * reconnect is attempted. Off by default, matching the server's `closeSignal`
+ * default — an application that never enabled either keeps today's behaviour, and
+ * an application event named `close` is never mistaken for a teardown.
  */
+export interface SseClientPubSubTransportOptions {
+  /**
+   * Honour the server's `$close` frame (see {@link SSE_CLOSE_EVENT}): close the
+   * stream and stop reconnecting. Default `false`. Enable it together with the
+   * server's `closeSignal`.
+   */
+  closeSignal?: boolean;
+}
 const finalHasQuery = (target: string) => target.includes('?');
 
 export class SseClientPubSubTransport implements IPubSubClientTransport {
   private apiRoot: string = '';
+  private readonly closeSignal: boolean;
+
+  constructor(options: SseClientPubSubTransportOptions = {}) {
+    this.closeSignal = options.closeSignal ?? false;
+  }
 
   setApiRoot(apiRoot: string) {
     this.apiRoot = apiRoot;
@@ -68,6 +90,9 @@ export class SseClientPubSubTransport implements IPubSubClientTransport {
     const exactWanted = new Map<string, Set<Function>>();
     const regexWanted = new Map<string, Set<Function>>();
     let es: EventSource = new EventSource(finalUrl);
+    /** Set once the server ended the session: no reconnect, `readyState` reports CLOSED. */
+    let closedByServer = false;
+    let closeReason: PubSubSessionCloseReason | undefined;
     // 包装监听器映射，确保 off 能卸载（重开后需在新连接上重建）
     let wrapMap = new Map<string, Map<Function, EventListener>>();
     let _regexListenerEntries = new Map<string, {regex: RegExp; handler: (e: MessageEvent) => void; original: Function}[]>();
@@ -131,7 +156,27 @@ export class SseClientPubSubTransport implements IPubSubClientTransport {
         return true;
       };
     };
+    /**
+     * Listen for the server's session-close notice on the current connection.
+     * Registered outside `on()`: it is transport control, not an application
+     * subscription, and it must survive a re-open (see {@link reattachAll}).
+     */
+    const attachCloseSignal = (target: EventSource) => {
+      if (!this.closeSignal) return;
+      target.addEventListener(SSE_CLOSE_EVENT, (e: Event) => {
+        const data = parseEventData((e as MessageEvent).data);
+        closeReason = data?.reason;
+        closedByServer = true;
+        try {
+          target.close();
+        } catch {
+          // Already gone: the flags above are what the stream reports.
+        }
+      });
+    };
+
     patchDispatch(es);
+    attachCloseSignal(es);
 
     // 注册 welcome 监听器，在 await 之前
     const welcomePromise = new Promise<{ clientId: string; token?: string }>((resolve) => {
@@ -163,6 +208,7 @@ export class SseClientPubSubTransport implements IPubSubClientTransport {
       // The implementation is reconnecting to the same URL. If the server issued a
       // resume credential and this connection does not carry it, re-open with it so
       // the drop resumes the same session instead of starting a new one.
+      if (closedByServer) return;
       if (resumedWithCredential || !state.token) return;
       if (es.readyState !== 0) return; // 0 CONNECTING: a reconnect is in progress
       const target = withCredential(finalUrl);
@@ -172,6 +218,7 @@ export class SseClientPubSubTransport implements IPubSubClientTransport {
         es.close();
         es = new EventSource(target);
         reattachAll();
+        attachCloseSignal(es);
       } catch {
         // Fall back to the implementation's own reconnect on the original URL.
       }
@@ -223,6 +270,7 @@ export class SseClientPubSubTransport implements IPubSubClientTransport {
       wrapMap = new Map();
       _regexListenerEntries = new Map();
       patchDispatch(es);
+      attachCloseSignal(es);
       for (const [event, listeners] of exactWanted) {
         for (const listener of listeners) on(event, listener as any);
       }
@@ -237,7 +285,8 @@ export class SseClientPubSubTransport implements IPubSubClientTransport {
       // the RPC calls too, so the control plane resolves this same session.
       get sessionToken() { return state.token; },
       protocol: 'sse',
-      get readyState() { return es.readyState; },
+      get readyState() { return closedByServer ? 2 : es.readyState; },
+      get closeReason() { return closeReason; },
       on, off,
       addRegExEventListener,
       removeRegExEventListener,

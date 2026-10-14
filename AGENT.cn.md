@@ -273,6 +273,12 @@ interface IPubSubClientTransport {
 }
 ```
 
+“关闭”那一半是共享的，不是每个传输一份：`PubSubCloseEvent` / `PubSubSessionCloseReason` 定义
+“这个会话结束了”通知的名字与原因，`PubSubStreamRegistry` 持有客户端传输名下的所有流，一次通知
+就能全部关闭。传输自己只提供走法——Electron 用自己的 `pubsub-close:{ns}` 通道（始终如此）；SSE 在
+流上写一帧 `$close`，且要两端都显式启用（`SseServerPubSubTransport({ closeSignal: 'server' })` +
+`SseClientPubSubTransport({ closeSignal: true })`）。
+
 ## 常见陷阱
 
 1. ❌ **未调用 `backendEventable` 就使用 `.on()`** → `TypeError`
@@ -285,3 +291,4 @@ interface IPubSubClientTransport {
 8. ❌ **传输层上不装身份策略就提供 SSE 流** → `list` 返回 401；补上 `identity: new RpcSessionIdentityPolicy()`
 9. ❌ **装了策略但用默认 `credentialReader`** → 流上的 `session_token` 对它不可见，每次重连都是新会话；传 `credentialReader: sseCredentialReader`
 10. ❌ **还在调 `addDiscoveryHandler`** → 发现已是 RPC 前缀上的内置 `rpcApis` 工具；要自定义清单就自己 `addRoute` 一个 `toolId`
+11. ❌ **以为服务端的 `session.close()` 会传到客户端** → SSE 上这个通知是显式启用的（两端都要 `closeSignal`）；不开则客户端把它当作掉线，去续传一个已结束的会话

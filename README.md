@@ -18,17 +18,19 @@ This package is built upon [`@isdk/tool-func`](https://github.com/isdk/tool-func
 The project includes both unit tests and browser-based E2E tests.
 
 ```bash
-# Unit tests (vitest, 101 tests)
+# Unit tests (vitest, 166 tests)
 pnpm test
 
-# Browser E2E tests (Playwright, Chromium, 77 tests)
+# Browser E2E tests (Playwright, Chromium, 92 tests)
 # The suite covers the data plane and the RPC control plane: the test server runs
 # an EventServer on a second port (/api/rpc/, proxied by Vite) so the browser
 # exercises discovery, $sub/$unsub/$publish, targeted publish, and reconnection
-# with Last-Event-ID replay for real.
+# with Last-Event-ID replay for real. A third mount (/api/closebox/) runs the same
+# transport with `closeSignal: 'server'`, so the announced-close path is exercised
+# in the browser too.
 pnpm test:e2e
 
-# The browser example app (examples/browser-e2e, 53 checks)
+# The browser example app (examples/browser-e2e, 58 checks)
 pnpm test:examples
 
 # Unit tests, 3 repeats (vitest --repeats) — flakiness check (CI runs this)
@@ -48,6 +50,7 @@ The E2E tests cover:
 - Multi-data type support (object, array, string)
 - Stream lifecycle (close, cleanup)
 - Reconnection with `Last-Event-ID` replay (missed events recovery)
+- Server-announced session close (`closeSignal`): the `$close` frame ends the stream and the browser does not reconnect
 - Regex (string-form and `RegExp`) subscriptions over SSE
 - Regression coverage for non-JSON payloads, throwing listeners, global-flag regex, and dedup across separate `subscribe` calls
 - `@isdk/tool-event/transports/pubsub/browser` subpath imports in browser
@@ -430,6 +433,8 @@ A session has **one live stream**: a second connection carrying the credential t
 | `resumeWindow` (30s) | How long a dropped session may be resumed with its subscription list. The window reopens at every drop, so a session that keeps dropping stays resumable; `0` turns every reconnect into a new session. |
 | `maxStreamDuration` (30s) | The server ends the stream on a timer. That is a drop like any other: it opens the resume window, and the client resumes the same session without knowing the difference. `0` disables the limit. |
 | `historySize` (100) | How far back a reconnect can be replayed. |
+
+A **drop** is not a **close**. Resume is the right answer for a proxy timeout or a `maxStreamDuration` expiry; it is the wrong answer when the server ended the session (`session.close()`), because the client then resumes a session that no longer exists while its stream still reports `readyState === 1`. `closeSignal` opts into a `$close` frame for exactly that case — `'server'` announces `session.close()`, `'server+reset'` also a channel reset — and the client honours it with `new SseClientPubSubTransport({ closeSignal: true })`: the stream goes CLOSED, `closeReason` says why, and no reconnect is attempted. Off by default on both ends, so the stream stays byte-identical unless you ask. See [pubsub.md](./pubsub.md) for why the frame is named `$close` and why it never enters the replay history.
 
 ### 7. Implementing and Using Pluggable Transports
 

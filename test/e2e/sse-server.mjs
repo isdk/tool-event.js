@@ -10,6 +10,8 @@
  * - POST /api/echo        Echo event back to SSE clients
  * - POST /api/disconnect  Drop all SSE connections (for reconnection tests)
  * - POST /api/ctrl/publish Server-initiated publish through the real EventServer
+ * - GET  /api/closebox/clients Sessions on the close-signal mount (closeSignal: 'server')
+ * - POST /api/closebox/close   Close those sessions, announcing it on the stream
  * - GET  /api/status      Server status
  * - POST /api/e2e-result  Log test result (debugging)
  * - Static files from dist/
@@ -194,6 +196,26 @@ const ctrlSessions = new Set()
 ctrlTransport.onConnection((s) => ctrlSessions.add(s))
 ctrlTransport.onDisconnect((s) => ctrlSessions.delete(s))
 
+// A second mount with the close signal switched on, so the plane above can keep the
+// default `closeSignal: false` — its reconnect test depends on a dropped stream being
+// resumed rather than announced. `setPubSubTransport` writes a static, which is why
+// this mount needs its own subclass: the transport belongs to the class, not the
+// instance, and `CloseSignalEventServer.list` is what the stream route serves.
+class CloseSignalEventServer extends EventServer {}
+
+const closeIdentity = new RpcSessionIdentityPolicy()
+const closeTransport = new SseServerPubSubTransport({
+  revoke: (id) => closeIdentity.revoke(id),
+  closeSignal: 'server',
+})
+CloseSignalEventServer.setPubSubTransport(closeTransport)
+const closeEventServer = new CloseSignalEventServer('closebox')
+closeEventServer.register()
+
+const closeSessions = new Set()
+closeTransport.onConnection((s) => closeSessions.add(s))
+closeTransport.onDisconnect((s) => closeSessions.delete(s))
+
 // The same tool, mounted by a transport with **no identity policy** (see the second RPC
 // server at the bottom of this file). It exists so the browser suite can assert the
 // documented refusal: with no server-decided id to key a session on, `EventServer.list`
@@ -349,6 +371,33 @@ const server = http.createServer((req, res) => {
     return
   }
 
+  // Close-signal mount: GET /api/closebox/clients
+  // Proves the browser reached *this* mount (not the control plane) and that its
+  // session is still alive afterwards.
+  if (pathname === '/api/closebox/clients' && req.method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({
+      sessions: closeSessions.size,
+      clients: [...closeSessions].map(s => ({ clientId: s.clientId, readyState: s.readyState })),
+    }))
+    return
+  }
+
+  // Close-signal mount: POST /api/closebox/close
+  // `session.close()` where the transport has `closeSignal: 'server'`, so the client
+  // is told on its stream and must NOT reconnect. Contrast with the control-plane
+  // disconnect below: the same call on a default transport is a drop the client
+  // resumes, and the suite would otherwise have no way to tell the two apart.
+  if (pathname === '/api/closebox/close' && req.method === 'POST') {
+    const closed = [...closeSessions]
+    for (const session of closed) {
+      try { session.close('server') } catch { /* already gone */ }
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ ok: true, closed: closed.length }))
+    return
+  }
+
   // Control-plane disconnect: POST /api/ctrl/disconnect
   // Ends every control-plane SSE response. The EventSource treats a completed stream
   // as a dropped connection and reconnects after the `retry:` interval, carrying
@@ -423,6 +472,15 @@ const rpc = new HttpServerToolTransport({ identity, credentialReader: sseCredent
 // Discovery is a built-in tool (`rpcApis`) served on the RPC prefix: no handler to add.
 rpc.addRpcHandler(RPC_API_ROOT)
 
+// The close-signal mount (proxied at /api/closebox by vite.config.mts). Its own
+// listen address, like every other mount here.
+const CLOSE_RPC_PORT = RPC_PORT + 2
+const closeRpc = new HttpServerToolTransport({
+  identity: closeIdentity,
+  credentialReader: sseCredentialReader,
+})
+closeRpc.addRpcHandler(`http://localhost:${CLOSE_RPC_PORT}/api/closebox/`)
+
 // The no-policy mount. Its own listen address: two transports cannot share one port.
 const ANON_RPC_PORT = RPC_PORT + 1
 const anonEventServer = new EventServer('anon')
@@ -437,14 +495,16 @@ server.listen(PORT, () => {
 })
 
 await rpc.start({ port: RPC_PORT })
+await closeRpc.start({ port: CLOSE_RPC_PORT })
 await anonRpc.start({ port: ANON_RPC_PORT })
 console.log(`🛰 RPC control plane at ${RPC_API_ROOT}`)
 console.log(`   discovery: GET  /api/rpc/   rpc: POST /api/rpc/<tool>`)
 console.log(`   event stream: GET /api/rpc/event`)
+console.log(`🔒 close-signal mount at http://localhost:${CLOSE_RPC_PORT}/api/closebox/ (closeSignal: 'server')`)
 console.log(`🚫 no-policy mount at http://localhost:${ANON_RPC_PORT}/api/anon/ (stream must be refused)`)
 
 function shutdown() {
-  Promise.all([rpc.stop(true), anonRpc.stop(true)]).finally(() => process.exit(0))
+  Promise.all([rpc.stop(true), closeRpc.stop(true), anonRpc.stop(true)]).finally(() => process.exit(0))
   setTimeout(() => process.exit(0), 2000).unref()
 }
 process.on('SIGINT', shutdown)

@@ -3,6 +3,11 @@ import { throwError } from "@isdk/common-error";
 import type { RpcIdentity } from '@isdk/tool-rpc';
 import { toEventMatcher } from './event-pattern';
 import { SSE_RESUME_LAST_EVENT_QUERY } from './sse-identity';
+import {
+  PubSubWelcomeEvent,
+  SSE_CLOSE_EVENT,
+  type PubSubSessionCloseReason,
+} from '../transports/pubsub/close';
 
 type Events = (string | RegExp)[];
 
@@ -122,6 +127,17 @@ export class SSEChannel {
    *   (`(id) => identity.revoke?.(id)`) so a reset channel does not leave credentials
    *   behind. The channel holds no policy of its own: identity is decided by the RPC
    *   transport, once per request.
+   * @param options.closeSignal - Whether a server-ended session is announced on the
+   *   stream with a `$close` frame (`{ reason }`) before the response ends. Default
+   *   `false`, which keeps the stream byte-identical to earlier versions: SSE's default
+   *   answer to a server-side close is "the stream dropped, resume it", and a client that
+   *   has not opted in (`SseClientPubSubTransport({ closeSignal: true })`) would ignore
+   *   the frame anyway. `'server'` announces `closeSession()` only; `'server+reset'`
+   *   also announces a channel reset (`clearClients()`). Drops never announce —
+   *   `maxStreamDuration`, a closed socket and a resume takeover all open the resume
+   *   window, and a close frame there would end a session that is meant to be resumed.
+   *   The frame is written straight to the response, so it never enters the replay
+   *   history: a stale close replayed to a reconnecting client would stop it reconnecting.
    */
   constructor(options?: Record<string, any>) {
     this.options = Object.assign(
@@ -134,7 +150,8 @@ export class SSEChannel {
         historySize: 100,
         rewind: 0,
         cors: false,
-        resumeWindow: 30000
+        resumeWindow: 30000,
+        closeSignal: false
       },
       options
     )
@@ -374,7 +391,7 @@ export class SSEChannel {
     // leaves the delivery to the transport instead of naming a header of its own.
     this.publish(
       { clientId: finalClientId, sessionToken: identity.credential },
-      'welcome',
+      PubSubWelcomeEvent,
       { clientId: finalClientId }
     );
 
@@ -390,7 +407,56 @@ export class SSEChannel {
   }
 
   /**
+   * Whether a close of this kind is announced on the stream (`closeSignal`).
+   */
+  private announcesClose(kind: 'server' | 'reset'): boolean {
+    const mode = this.options.closeSignal
+    if (!mode) return false
+    if (mode === 'server+reset') return true
+    return mode === 'server' && kind === 'server'
+  }
+
+  /**
+   * Write the `$close` notice straight to the response — deliberately *not* via
+   * {@link publish}, because a published frame enters the replay history, and a
+   * client that reconnects after the session was already ended would be handed a
+   * stale close and stop reconnecting.
+   *
+   * No `id:` line either: the notice is not part of the replayable sequence, so it
+   * must not advance the client's resume position.
+   */
+  private writeCloseFrame(c: SSEClient, reason: PubSubSessionCloseReason, kind: 'server' | 'reset'): boolean {
+    if (!this.announcesClose(kind)) return false
+    const res = c.res as any
+    if (!res || typeof res.write !== 'function') return false
+    if (res.writableEnded || res.destroyed) return false
+    res.write(`event: ${SSE_CLOSE_EVENT}\ndata: ${JSON.stringify({ reason })}\n\n`)
+    return true
+  }
+
+  /**
+   * End a session the *server* decided to end (`session.close()`), as opposed to a
+   * drop. With `closeSignal` on, the client is told first, so its stream can go
+   * CLOSED instead of reconnecting into a session that is already gone.
+   *
+   * The resume window is left as a drop leaves it: a client that has not opted into
+   * `closeSignal` behaves exactly as before and resumes, and one that has opted in
+   * never asks. Closing the window here would change the behaviour of clients that
+   * did not opt in.
+   *
+   * @param c - The client whose session ends.
+   * @param reason - Carried on the notice; see {@link PubSubSessionCloseReason}.
+   */
+  closeSession(c: SSEClient, reason: PubSubSessionCloseReason = 'server'): void {
+    this.writeCloseFrame(c, reason, 'server')
+    this.disconnect(c)
+  }
+
+  /**
    * Disconnects a client from the SSE channel and cleans up resources.
+   *
+   * A drop: no close notice, because the session stays resumable. Use
+   * {@link closeSession} when the session itself is over.
    * @param c - The client to disconnect.
    */
   disconnect(c: SSEClient) {
@@ -409,7 +475,12 @@ export class SSEChannel {
     // An explicit channel reset is not a drop: nothing may be resumed after it, and
     // `resolve` only ever resumes a session inside its window.
     const known = new Set<string>([...this.clients.keys(), ...this.resumable.keys()])
-    this.clients.forEach(c => c.res.end())
+    // A reset is not a drop: nothing may be resumed after it, so a client that opted
+    // into `closeSignal` should stop reconnecting rather than retry a dead channel.
+    this.clients.forEach(c => {
+      this.writeCloseFrame(c, 'transport-cleanup', 'reset')
+      c.res.end()
+    })
     this.clients.clear()
     this.resumable.clear()
     const revoke = this.options.revoke

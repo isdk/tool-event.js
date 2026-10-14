@@ -15,6 +15,17 @@ export interface SseServerPubSubTransportOptions {
   revoke?: (identityId: string) => void;
   /** Passed through to the underlying `SSEChannel` (pingInterval, resumeWindow, ...). */
   channelOptions?: Record<string, any>;
+  /**
+   * Announce a server-ended session on the stream with a `$close` frame before the
+   * response ends (`'server'`), and a channel reset too (`'server+reset'`). Default
+   * `false`: SSE's answer to `session.close()` is otherwise "the stream dropped",
+   * which a reconnecting client resumes as if nothing happened. The client has to
+   * opt in as well (`new SseClientPubSubTransport({ closeSignal: true })`).
+   *
+   * Shorthand for `channelOptions: { closeSignal }`; the channel option wins if both
+   * are given.
+   */
+  closeSignal?: false | 'server' | 'server+reset';
 }
 
 export class SseServerPubSubTransport implements IPubSubServerTransport {
@@ -28,7 +39,13 @@ export class SseServerPubSubTransport implements IPubSubServerTransport {
   private onDis?: (s: PubSubServerSession) => void;
 
   constructor(options: SseServerPubSubTransportOptions = {}) {
-    this.channel = new SSEChannel({ ...options.channelOptions, revoke: options.revoke });
+    this.channel = new SSEChannel({
+      // The explicit option is a shorthand; channelOptions keeps precedence so an
+      // existing config that already sets it there is not silently overridden.
+      closeSignal: options.closeSignal ?? false,
+      ...options.channelOptions,
+      revoke: options.revoke,
+    });
   }
 
   connect(options?: {
@@ -59,7 +76,10 @@ export class SseServerPubSubTransport implements IPubSubServerTransport {
         // Correctly delegate sending to the channel, targeting this specific client
         this.channel.publish(data, event, { clientId: client.clientId });
       },
-      close: () => this.channel.disconnect(client),
+      // A server-initiated close, not a drop: `closeSession` may announce it first,
+      // so a client that opted into `closeSignal` stops instead of resuming a session
+      // that application code has already ended.
+      close: () => this.channel.closeSession(client, 'server'),
       raw: res,
     };
 

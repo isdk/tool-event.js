@@ -1136,6 +1136,53 @@ async function runTests() {
       `delivered=${rc2Hits.join(',')}`)
     rpcEvent.close()
 
+    // 21. The close signal, from a browser. On a mount whose transport has
+    //     `closeSignal: 'server'`, `session.close()` is announced on the stream, so the
+    //     page's EventSource must NOT reconnect. Section 20 just proved the opposite for
+    //     a default transport — the same `session.close()` there was a drop that got
+    //     replayed — so without this second mount the two are indistinguishable here.
+    setStatus('🔒 Testing the close signal in the browser...')
+    const CLOSE_ROOT = window.location.origin + '/api/closebox/'
+    const closeSignalTransport = new SseClientPubSubTransport({ closeSignal: true })
+    closeSignalTransport.setApiRoot(CLOSE_ROOT)
+    const closeSignalStream = await withTimeout(
+      closeSignalTransport.connect('closebox', { event: ['close-me'] }),
+      TEST_TIMEOUT, 'close-signal stream')
+
+    // The page reached the close-signal mount, not the control plane: the server
+    // assigned this session the id the stream reports.
+    const closeBoxInfo: any = await (await fetch(SSE_URL + '/api/closebox/clients')).json()
+    report('close signal: the page opens a session on the closeSignal mount',
+      closeBoxInfo.sessions === 1 && closeBoxInfo.clients[0]?.clientId === closeSignalStream.clientId,
+      `sessions=${closeBoxInfo.sessions} stream=${closeSignalStream.clientId}`)
+
+    await fetch(SSE_URL + '/api/closebox/close', { method: 'POST' })
+    await waitForSettled(() => closeSignalStream.readyState === 2, { settle: 300, label: 'the announced close lands' })
+    report('close signal: the server ends the session and the browser stream is CLOSED',
+      closeSignalStream.readyState === 2 && closeSignalStream.closeReason === 'server',
+      `readyState=${closeSignalStream.readyState} closeReason=${closeSignalStream.closeReason}`)
+
+    // The refusal to reconnect is the point of the signal, and it is only observable by
+    // waiting past the `retry:` interval (1s) — section 20 reconnects inside that window.
+    await sleep(2500)
+    const afterCloseInfo: any = await (await fetch(SSE_URL + '/api/closebox/clients')).json()
+    report('close signal: the browser stays down and the server session is gone',
+      closeSignalStream.readyState === 2 && afterCloseInfo.sessions === 0,
+      `readyState=${closeSignalStream.readyState} sessions=${afterCloseInfo.sessions} after 2.5s`)
+
+    // What the signal forbids is the *automatic* reconnect. Starting over is still the
+    // application's call, and it gets a new session: the closed one is really gone.
+    const reopened = await withTimeout(
+      closeSignalTransport.connect('closebox', { event: ['close-me'] }),
+      TEST_TIMEOUT, 'a deliberate connect after the signaled close')
+    const reopenedInfo: any = await (await fetch(SSE_URL + '/api/closebox/clients')).json()
+    report('close signal: a deliberate connect afterwards opens a fresh session',
+      reopened.readyState === 1
+        && reopened.clientId !== closeSignalStream.clientId
+        && reopenedInfo.sessions === 1,
+      `closed ${closeSignalStream.clientId}, new ${reopened.clientId}, sessions=${reopenedInfo.sessions}`)
+    reopened.close()
+
     // All done
     const passed = RESULTS.filter(r => r.passed).length
     const total = RESULTS.length

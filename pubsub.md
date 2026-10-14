@@ -347,6 +347,56 @@ EventServer.setPubSubTransport(new SseServerPubSubTransport({
 > event protocol either way — an external auth protocol replaces the policy, it does not
 > extend it.
 
+### Announcing a session the server ended (`$close`)
+
+A dropped SSE stream is not a closed session. A proxy timeout, a `maxStreamDuration`
+expiry and a resume takeover are all drops: the client reconnects and resumes the same
+session, and that is the right answer. It is the wrong answer when the **server** ended the
+session — application code calling `session.close()`, or the channel being reset — because
+the client then resumes a session that no longer exists, and its stream keeps reporting
+`readyState === 1` while it sends events nobody receives.
+
+`closeSignal` opts into telling the client, on each end independently:
+
+```typescript
+// Server: shorthand on the transport, or `channelOptions: { closeSignal }`.
+EventServer.setPubSubTransport(new SseServerPubSubTransport({
+  revoke: (id) => identity.revoke(id),
+  closeSignal: 'server',
+}))
+
+// Client: honours the frame. Off by default, so it pairs with the server's switch.
+EventClient.setPubSubTransport(new SseClientPubSubTransport({ closeSignal: true }))
+```
+
+| `closeSignal` | What is announced |
+|---|---|
+| `false` (default) | Nothing. The stream stays byte-identical to earlier versions: every end of a stream is a drop, and the client resumes. |
+| `'server'` | A `$close` frame (`{ reason }`) when `session.close()` ends the session. Never on a drop — a drop opens the resume window, and a close frame there would end a session meant to be resumed. |
+| `'server+reset'` | Also on a channel reset (`clearClients()`, e.g. a revoked session), where resuming has no future. |
+
+Two details of the frame matter to anyone writing a transport of their own:
+
+- **The name is `$close`**, the same control-plane prefix `$sub` / `$unsub` / `$publish`
+  use. On SSE the notice shares the application's event namespace, so a bare `close` would
+  let an application event of that name be mistaken for a session teardown.
+- **It is written straight to the response, never through `publish()`**, and carries no
+  `id:` line. A published frame enters the replay history, and a client that reconnects
+  without a subscription list replays *everything* — an old close in that replay would stop
+  it reconnecting.
+
+A client that opted in closes its stream on the frame: `readyState` becomes `2` (CLOSED),
+`closeReason` reports why (`server`, `transport-cleanup`, …), no reconnect is attempted, and
+`send()` stops. Leaving either switch off keeps the old behaviour: a server that announces to
+a client that never opted in sends a frame nobody listens for, and a client that opted in
+against a silent server simply never sees one.
+
+Electron needs no switch: `@isdk/tool-electron` announces the same event on its own
+`pubsub-close:{namespace}` channel, always, because the channel namespace already keeps it
+out of the application's event names. The names and reasons are defined once, in
+`transports/pubsub/close` (`PubSubCloseEvent`, `PubSubSessionCloseReason`,
+`PubSubStreamRegistry`) — a transport decides only how the notice travels, not what it says.
+
 ## Example: Electron IPC for Real-time Desktop Apps
 
 For desktop applications built with Electron, the event system can operate over the built-in Inter-Process Communication (IPC) channels. This provides a highly efficient, real-time backend within your application shell without needing an HTTP server.
@@ -978,7 +1028,7 @@ Two behaviors live in `EventServer` / `EventClient`, so a custom transport gets 
 for free: pattern matching and dedup are driven by the client/server bookkeeping, and
 the `client:` prefixing of client-originated events is applied by `EventServer`.
 
-Two do **not**, and are the transport's own responsibility:
+Three do **not**, and are the transport's own responsibility:
 
 - **Pattern delivery.** `EventServer` forwards a matched event to `publish()`; only
   `addRegExEventListener` on the stream makes the client fire **one** listener per
@@ -988,8 +1038,14 @@ Two do **not**, and are the transport's own responsibility:
   session. A transport that does not implement this loses the session on every drop:
   new `clientId`, and a subscription list rebuilt from the reconnect URL — i.e. the list
   from the *first* connect, so anything subscribed afterwards is silently lost. A
-  bidirectional transport can resume over its own channel (no URL constraint); a
-  unidirectional one must carry the credential in the connect parameters, as SSE does.
+  bidirectional transport can resume over its own channel (no URL constraint);  a unidirectional one must carry the credential in the connect parameters, as SSE does.
+- **Announcing a session the server ended.** `EventServer` calls `session.close()`; only the
+  transport can tell the client its session is over, or that client's stream sits at
+  `readyState === 1` and keeps sending into a session that no longer exists. The vocabulary
+  is shared — `PubSubCloseEvent`, `PubSubSessionCloseReason` — and so is the client-side
+  fan-out: `PubSubStreamRegistry` holds every stream one client transport owns, so a single
+  notice closes all of them. What each transport supplies is only the wire: its own channel
+  (Electron's `pubsub-close:{ns}`, always) or a frame on the stream (SSE's `$close`, opt-in).
 
 ### When no transport is set
 

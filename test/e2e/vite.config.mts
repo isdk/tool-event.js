@@ -82,6 +82,9 @@ export default defineConfig({
       // The no-identity mount (sse-server.mjs) runs on the port above the RPC plane, so
       // the page can ask it for a stream and read the refusal without tripping CORS.
       '/api/anon': `http://localhost:${RPC_PORT + 1}`,
+      // The close-signal mount (sse-server.mjs) runs one port above that, so the page
+      // can open a stream there and have its session closed with a `$close` frame.
+      '/api/closebox': `http://localhost:${RPC_PORT + 2}`,
     },
   },
 })

@@ -48,6 +48,20 @@ export type {
   PubSubClientId,
 } from './transports/pubsub';
 
+// The shared close contract: names, reasons, and the stream registry. Pure JS, so
+// the browser entry carries it too — a browser client needs the frame name to
+// recognise a server-ended session.
+export {
+  PubSubWelcomeEvent,
+  PubSubCloseEvent,
+  SSE_CONTROL_EVENT_PREFIX,
+  SSE_CLOSE_EVENT,
+  PubSubStreamRegistry,
+  type PubSubSessionCloseReason,
+  type PubSubCloseNotice,
+  type PubSubStreamTeardown,
+} from './transports/pubsub/close';
+
 // SSE client transport (uses the `eventsource` peer dependency)
 export { SseClientPubSubTransport } from './transports/pubsub/sse-client';
 

@@ -273,6 +273,13 @@ interface IPubSubClientTransport {
 }
 ```
 
+The close half is shared, not per transport: `PubSubCloseEvent` / `PubSubSessionCloseReason`
+name the "this session ended" notice and its reasons, and `PubSubStreamRegistry` holds every
+stream a client transport owns so one notice closes them all. A transport supplies only the
+wire — Electron uses its own `pubsub-close:{ns}` channel (always); SSE writes a `$close` frame
+on the stream, and only when both ends opt in (`SseServerPubSubTransport({ closeSignal:
+'server' })` + `SseClientPubSubTransport({ closeSignal: true })`).
+
 ## Common Pitfalls
 
 1. ❌ **Calling `.on()` without `backendEventable`** → `TypeError`
@@ -285,3 +292,4 @@ interface IPubSubClientTransport {
 8. ❌ **Serving the SSE stream with no identity policy on the transport** → `list` answers 401; add `identity: new RpcSessionIdentityPolicy()`
 9. ❌ **Policy installed but default `credentialReader`** → the stream's `session_token` is invisible to it, so every reconnect is a new session; pass `credentialReader: sseCredentialReader`
 10. ❌ **Calling `addDiscoveryHandler`** → discovery is the built-in `rpcApis` tool on the RPC prefix now; a custom listing is a route with your own `toolId`
+11. ❌ **Assuming a server-side `session.close()` reaches the client** → on SSE that notice is opt-in (`closeSignal` on both ends); off, the client treats it as a drop and resumes the ended session

@@ -18,16 +18,18 @@
 项目包含单元测试和基于浏览器的 E2E 测试。
 
 ```bash
-# 单元测试 (vitest, 101 个)
+# 单元测试 (vitest, 166 个)
 pnpm test
 
-# 浏览器 E2E 测试 (Playwright, Chromium, 77 个)
+# 浏览器 E2E 测试 (Playwright, Chromium, 92 个)
 # 该套件同时覆盖数据面与 RPC 控制面：测试服务器在第二个端口上运行真实的
 # EventServer（/api/rpc/，由 Vite 代理），浏览器因此可以真实地跑通发现、
 # $sub/$unsub/$publish、定向推送，以及带 Last-Event-ID 重放的重连。
+# 第三个挂载点（/api/closebox/）用 `closeSignal: 'server'` 跑同一个传输，
+# 于是「服务端宣告关闭」这条路径也在浏览器里得到验证。
 pnpm test:e2e
 
-# 浏览器示例应用 (examples/browser-e2e，53 项检查)
+# 浏览器示例应用 (examples/browser-e2e，58 项检查)
 pnpm test:examples
 
 # 单元测试重复 3 轮（vitest --repeats）—— 抖动检查（CI 会跑这一项）
@@ -45,6 +47,7 @@ E2E 测试覆盖范围：
 - 多数据类型支持（对象、数组、字符串）
 - 流生命周期（关闭、清理）
 - 重连与 `Last-Event-ID` 重放（断连期间丢失事件的恢复）
+- 服务端宣告的会话关闭（`closeSignal`）：`$close` 帧结束流，浏览器不再重连
 - 通过 SSE 的正则订阅（字符串形式正则与 `RegExp` 对象）
 - 回归覆盖：非 JSON 负载、抛异常的 listener、带 `g` 标志的正则、多次 `subscribe` 调用之间的去重
 - `@isdk/tool-event/transports/pubsub/browser` 子路径在浏览器中的导入
@@ -424,6 +427,8 @@ EventServer.setPubSubTransport(new SseServerPubSubTransport({
 | `resumeWindow`（30s） | 会话断开后可以用原有订阅列表续用的时长。每次断开都会重新开启这个窗口，因此不断掉线的会话始终可续用；设为 `0` 则每次重连都会开一个新会话。 |
 | `maxStreamDuration`（30s） | 服务端定时结束该流。这与其他断开没有区别：它开启续用窗口，客户端续用同一个会话且无需感知。设为 `0` 关闭该限制。 |
 | `historySize`（100） | 重连可重放的历史深度。 |
+
+**掉线**不是**关闭**。对代理超时或 `maxStreamDuration` 到期而言，续用是正确答案；但当会话是服务端结束的（`session.close()`），它就是错答案：客户端会去续传一个已不存在的会话，而它的流仍报告 `readyState === 1`。`closeSignal` 止为这种情况提供一帧 `$close`——`'server'` 宣告 `session.close()`，`'server+reset'` 还宣告通道重置——客户端用 `new SseClientPubSubTransport({ closeSignal: true })` 识别它：流进入 CLOSED，`closeReason` 说明原因，不再重连。两端默认均关闭，不要求则字节流与旧版本一致。为何帧名叫 `$close`、以及它为何不进入重放历史，见 [pubsub.cn.md](./pubsub.cn.md)。
 
 ### 7. 实现并使用可插拔传输层
 

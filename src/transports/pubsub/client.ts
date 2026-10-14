@@ -1,4 +1,5 @@
 import type { PubSubCtx } from './base';
+import type { PubSubSessionCloseReason } from './close';
 
 /**
  * Represents the client-side stream for a PubSub connection.
@@ -36,6 +37,14 @@ export interface PubSubClientStream {
    * (e.g., 0 for connecting, 1 for open, 2 for closed).
    */
   readyState?: number;
+
+  /**
+   * Optional. Why the *server* ended this stream's session, once it has said so
+   * (see {@link PubSubSessionCloseReason}). Absent when the stream closed locally or
+   * the transport's server does not announce closes — on SSE that is the default
+   * until `closeSignal` is enabled on both ends.
+   */
+  closeReason?: PubSubSessionCloseReason;
 
   /**
    * Registers a listener for a specific event from the server.

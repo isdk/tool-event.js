@@ -321,6 +321,48 @@ EventServer.setPubSubTransport(new SseServerPubSubTransport({
 > 而一个校验鉴权服务签名 token 的策略，会把租户与 scope 带在 `identity.attributes` 里。两种情况下鉴权都在
 > 事件协议之外——外部鉴权协议是替换策略，而不是扩展策略。
 
+### 宣告“服务端结束的会话”（`$close`）
+
+SSE 流断开并不等于会话结束。代理超时、`maxStreamDuration` 到期、被第二条连接接管，这些都是“掉线”：
+客户端重连并续传同一个会话——这是正确答案。但当会话是**服务端**结束的（业务代码调用 `session.close()`，
+或通道被重置），这个答案就错了：客户端会去续传一个已经不存在的会话，而它的流一直报告
+`readyState === 1`，发着没人接收的事件。
+
+`closeSignal` 让两端各自独立地启用这个通知：
+
+```typescript
+// 服务端：传输上的简写，等价于 `channelOptions: { closeSignal }`。
+EventServer.setPubSubTransport(new SseServerPubSubTransport({
+  revoke: (id) => identity.revoke(id),
+  closeSignal: 'server',
+}))
+
+// 客户端：识别这帧。默认关闭，与服务端的开关成对。
+EventClient.setPubSubTransport(new SseClientPubSubTransport({ closeSignal: true }))
+```
+
+| `closeSignal` | 宣告什么 |
+|---|---|
+| `false`（默认） | 什么都不发。字节流与旧版本完全一致：流的任何结束都被当作掉线，客户端照常续传。 |
+| `'server'` | `session.close()` 结束会话时发一帧 `$close`（`{ reason }`）。掉线永远不发——掉线会打开续传窗口，在那里发关闭帧等于结束一个本该被续传的会话。 |
+| `'server+reset'` | 通道重置时也发（`clearClients()`，例如凭证被 revoke）——此时续传没有未来。 |
+
+对想自己写传输的人来说，这帧有两个细节：
+
+- **帧名是 `$close`**，与 `$sub` / `$unsub` / `$publish` 同一个控制面前缀。SSE 上这帧与应用事件共享同一个
+  事件命名空间，裸的 `close` 会让一个同名的业务事件被误判成会话关闭。
+- **它直接写进响应，绝不走 `publish()`**，也不带 `id:` 行。发布出去的帧会进入重放历史，而没有订阅表的
+  客户端重连时会重放*全部*历史——那条旧的关闭帧会让它停止重连。
+
+启用后的客户端收到这帧就关闭自己的流：`readyState` 变为 `2`（CLOSED），`closeReason` 说明原因
+（`server`、`transport-cleanup`……），不再尝试重连，`send()` 停止。任一侧不开就保持原有行为：服务端向
+未启用的客户端发一帧没人监听的事件；启用的客户端对着不发帧的服务端，只是永远收不到。
+
+Electron 不需要开关：`@isdk/tool-electron` 一直在自己的 `pubsub-close:{namespace}` 通道上宣告同一件事，
+因为通道命名空间已经把它挡在应用事件名之外。名字与原因只定义一处——`transports/pubsub/close`
+（`PubSubCloseEvent`、`PubSubSessionCloseReason`、`PubSubStreamRegistry`）；传输自己只决定这帧怎么走，
+不决定它说什么。
+
 ## 示例：用 Electron IPC 构建实时桌面应用
 
 对于用 Electron 构建的桌面应用，事件系统可以跑在内置的进程间通信（IPC）通道上。它能在您的应用外壳内提供一套高效的实时后端，而无需 HTTP 服务端。
@@ -918,7 +960,7 @@ interface PubSubClientStream {
 
 有两个行为位于 `EventServer` / `EventClient` 内部，因此自定义传输可以免费获得：模式匹配与去重由客户端/服务端的记账驱动；客户端发起事件的 `client:` 前缀由 `EventServer` 施加。
 
-有两个**不**包含在内，属于传输自身的责任：
+有三个**不**包含在内，属于传输自身的责任：
 
 - **模式投递。**`EventServer` 把匹配到的事件交给 `publish()`；只有流上的 `addRegExEventListener`
   才能让客户端对每个事件调用**一个**监听器。省略它，模式订阅会告警一次并被跳过。
@@ -926,6 +968,11 @@ interface PubSubClientStream {
   恰好一条活动流。不实现这一点的传输，每次掉线都会失去会话：新的 `clientId`，以及一份从重连 URL
   重建的订阅表——也就是*首次*连接时的那份列表，于是此后追加的订阅会静默丢失。双向传输可以在自己
   的通道上续传（不受 URL 约束）；单向传输必须把凭证带进连接参数里，正如 SSE 的做法。
+- **宣告服务端结束的会话。**`EventServer` 调用 `session.close()`；只有传输能告诉客户端“你的会话结束了”，
+  否则那条客户端的流会一直停在 `readyState === 1`，向一个已经不存在的会话发送。词汇是共享的——
+  `PubSubCloseEvent`、`PubSubSessionCloseReason`——客户端侧的分发也是：`PubSubStreamRegistry` 持有
+  一个客户端传输名下的所有流，因此一次通知能关闭它们全部。每个传输要提供的只是走法：自己的通道
+  （Electron 的 `pubsub-close:{ns}`，始终如此）或流上的一帧（SSE 的 `$close`，需显式启用）。
 
 ### 未设置传输时
 
