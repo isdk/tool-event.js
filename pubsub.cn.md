@@ -359,7 +359,8 @@ EventClient.setPubSubTransport(new SseClientPubSubTransport({ closeSignal: true 
 未启用的客户端发一帧没人监听的事件；启用的客户端对着不发帧的服务端，只是永远收不到。
 
 Electron 不需要开关：`@isdk/tool-electron` 一直在自己的 `pubsub-close:{namespace}` 通道上宣告同一件事，
-因为通道命名空间已经把它挡在应用事件名之外。名字与原因只定义一处——`transports/pubsub/close`
+因为通道命名空间已经把它挡在应用事件名之外——它也隔离会话：一个连了两个命名空间的窗口会各收到一份
+通知，而每份只结束自己那个命名空间的流。名字与原因只定义一处——`transports/pubsub/close`
 （`PubSubCloseEvent`、`PubSubSessionCloseReason`、`PubSubStreamRegistry`）；传输自己只决定这帧怎么走，
 不决定它说什么。
 
@@ -429,8 +430,9 @@ const pubSubNamespace = 'electron://my-app-events';
 // 而事后才设置的 apiUrl，到达的是一个已经推导完（缺失）通道的传输。
 const pubsub = new ElectronClientPubSubTransport(pubSubNamespace);
 
-// 3. 打开流并监听。
-const stream = pubsub.connect(pubSubNamespace);
+// 3. 打开流并监听。第一个参数只是逻辑连接名：IPC 通道来自构造函数里给的
+// 命名空间，不是来自这个参数。
+const stream = pubsub.connect('events');
 
 stream.on('server-tick', (data) => {
   console.log('收到来自主进程的 tick:', data);
@@ -787,6 +789,9 @@ export interface PubSubServerSession {
   clientId?: PubSubClientId;
   /** 本会话的协议，例如 'sse'、'ws'、'ipc'、'electron'。 */
   protocol: 'sse' | 'ws' | 'ipc' | string;
+  /** 开启本会话的那个请求，由 RPC 传输的身份策略解析出的身份（`ctx.identity`），
+   *  前提是装了策略。传输自己的记账要以此为准，而不是请求自带的 id。 */
+  identity?: RpcIdentity;
   /** 向本会话的客户端发送一个事件与数据。 */
   send: (event: string, data: any, ctx?: PubSubCtx) => void;
   /** 关闭本会话的连接。 */
@@ -816,8 +821,14 @@ export interface IPubSubServerTransport {
     options?: {
       req: any; // 例如 http.IncomingMessage
       res: any; // 例如 http.ServerResponse
+      /** @deprecated 客户端自报的 id；永不被采纳。请用 `identity`。 */
       clientId?: string;
       events?: string[];
+      /** 该请求属于哪个会话，由 RPC 传输的 `RpcIdentityPolicy` 决定
+       *  （即开启这条流的那次调用上的 `ctx.identity`）。未装策略时 `EventServer.list`
+       *  会直接拒绝建流，所以传输可以把它当必填——这正是 `getSessionFromIdentity`
+       *  可信的原因。 */
+      identity?: RpcIdentity;
       [k: string]: any;
     }
   ) => PubSubServerSession;
@@ -914,6 +925,10 @@ interface PubSubClientStream {
    *  header，于是 `$sub`/`$publish` 匹配的是服务端签发的那个会话——绝不是客户端自选的 id。 */
   clientId: string;
 
+  /** 可选。服务端在 `welcome` 里交回的续连凭证（如果它会签发）。`EventClient` 会把它带上
+   *  后续的 RPC 调用，于是控制面解析出的就是这条流所属的那个会话。 */
+  sessionToken?: string;
+
   /** 必填。本流的协议（'sse'、'ws'、'ipc'、'electron'……）。
    *  正则不受支持的那条告警里点名的就是它。 */
   protocol: 'sse' | 'ws' | 'ipc' | string;
@@ -921,6 +936,10 @@ interface PubSubClientStream {
   /** 可选。0 连接中，1 已打开，2 已关闭。`EventClient` 把 2 视为已关闭，
    *  并按需重开这条流。 */
   readyState?: number;
+
+  /** 可选。服务端宣告结束本流所属会话后，记下结束原因（见 `PubSubSessionCloseReason`）。
+   *  本地关闭、或传输不宣告关闭时为空——SSE 在两端开启 `closeSignal` 之前就是这种情况。 */
+  closeReason?: PubSubSessionCloseReason;
 
   // ……on / off / close
 
@@ -971,7 +990,10 @@ interface PubSubClientStream {
 - **宣告服务端结束的会话。**`EventServer` 调用 `session.close()`；只有传输能告诉客户端“你的会话结束了”，
   否则那条客户端的流会一直停在 `readyState === 1`，向一个已经不存在的会话发送。词汇是共享的——
   `PubSubCloseEvent`、`PubSubSessionCloseReason`——客户端侧的分发也是：`PubSubStreamRegistry` 持有
-  一个客户端传输名下的所有流，因此一次通知能关闭它们全部。每个传输要提供的只是走法：自己的通道
+  共享同一个会话的所有流，因此一次通知能关闭它们全部。注册表按会话一份，不是按传输一份：一个服务
+  多个命名空间的客户端传输（Electron 那个，中途调用过 `setApiRoot()`）在一个窗口里持有多个会话，
+  其中一个的通知不能去关其他的流——也不能让那些流的 `close()` 记到它们头上，否则那些会话的流计数
+  在服务端就永远释放不了。每个传输要提供的只是走法：自己的通道
   （Electron 的 `pubsub-close:{ns}`，始终如此）或流上的一帧（SSE 的 `$close`，需显式启用）。
 
 ### 未设置传输时

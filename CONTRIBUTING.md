@@ -40,10 +40,10 @@ References to code point at files and symbols, never at line numbers: write "`Ev
 ## Testing
 
 ```shell
-pnpm test         # Unit tests (vitest, 166 tests)
+pnpm test         # Unit tests (vitest)
 pnpm test:repeat   # Unit tests, 3 repeats (vitest --repeats) — flakiness check
-pnpm test:e2e     # Browser E2E tests (Playwright, 92 tests)
-pnpm test:examples # Browser example app (examples/browser-e2e, 58 checks)
+pnpm test:e2e     # Browser E2E tests (Playwright)
+pnpm test:examples # Browser example app (examples/browser-e2e)
 pnpm test:all     # All tests (unit + E2E)
 ```
 

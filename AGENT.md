@@ -275,10 +275,13 @@ interface IPubSubClientTransport {
 
 The close half is shared, not per transport: `PubSubCloseEvent` / `PubSubSessionCloseReason`
 name the "this session ended" notice and its reasons, and `PubSubStreamRegistry` holds every
-stream a client transport owns so one notice closes them all. A transport supplies only the
-wire — Electron uses its own `pubsub-close:{ns}` channel (always); SSE writes a `$close` frame
-on the stream, and only when both ends opt in (`SseServerPubSubTransport({ closeSignal:
-'server' })` + `SseClientPubSubTransport({ closeSignal: true })`).
+stream sharing one session so one notice closes them all — one registry per session, not per
+transport, because a client transport can hold several sessions on one window (Electron's
+keeps one per namespace after a mid-life `setApiRoot()`, and a notice for one namespace must
+not close the other's streams). A transport supplies only the wire — Electron uses its own
+`pubsub-close:{ns}` channel (always, and scoped to that namespace's session); SSE writes a
+`$close` frame on the stream, and only when both ends opt in (`SseServerPubSubTransport({
+closeSignal: 'server' })` + `SseClientPubSubTransport({ closeSignal: true })`).
 
 ## Common Pitfalls
 

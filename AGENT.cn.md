@@ -274,10 +274,12 @@ interface IPubSubClientTransport {
 ```
 
 “关闭”那一半是共享的，不是每个传输一份：`PubSubCloseEvent` / `PubSubSessionCloseReason` 定义
-“这个会话结束了”通知的名字与原因，`PubSubStreamRegistry` 持有客户端传输名下的所有流，一次通知
-就能全部关闭。传输自己只提供走法——Electron 用自己的 `pubsub-close:{ns}` 通道（始终如此）；SSE 在
-流上写一帧 `$close`，且要两端都显式启用（`SseServerPubSubTransport({ closeSignal: 'server' })` +
-`SseClientPubSubTransport({ closeSignal: true })`）。
+“这个会话结束了”通知的名字与原因，`PubSubStreamRegistry` 持有共享同一个会话的所有流，一次通知
+就能全部关闭 —— 每个会话一份注册表，而不是每个传输一份，因为一个客户端传输可以在同一个窗口上
+持有多个会话（Electron 在生命周期中途 `setApiRoot()` 后每个命名空间各一份，而某个命名空间的
+关闭通知不能关掉另一个命名空间的流）。传输自己只提供走法——Electron 用自己的 `pubsub-close:{ns}`
+通道（始终如此，且只作用于该命名空间的会话）；SSE 在流上写一帧 `$close`，且要两端都显式启用
+（`SseServerPubSubTransport({ closeSignal: 'server' })` + `SseClientPubSubTransport({ closeSignal: true })`）。
 
 ## 常见陷阱
 

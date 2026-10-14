@@ -18,10 +18,10 @@ This package is built upon [`@isdk/tool-func`](https://github.com/isdk/tool-func
 The project includes both unit tests and browser-based E2E tests.
 
 ```bash
-# Unit tests (vitest, 166 tests)
+# Unit tests (vitest)
 pnpm test
 
-# Browser E2E tests (Playwright, Chromium, 92 tests)
+# Browser E2E tests (Playwright, Chromium)
 # The suite covers the data plane and the RPC control plane: the test server runs
 # an EventServer on a second port (/api/rpc/, proxied by Vite) so the browser
 # exercises discovery, $sub/$unsub/$publish, targeted publish, and reconnection
@@ -30,7 +30,7 @@ pnpm test
 # in the browser too.
 pnpm test:e2e
 
-# The browser example app (examples/browser-e2e, 58 checks)
+# The browser example app (examples/browser-e2e)
 pnpm test:examples
 
 # Unit tests, 3 repeats (vitest --repeats) — flakiness check (CI runs this)

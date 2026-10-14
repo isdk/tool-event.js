@@ -18,10 +18,10 @@
 项目包含单元测试和基于浏览器的 E2E 测试。
 
 ```bash
-# 单元测试 (vitest, 166 个)
+# 单元测试 (vitest)
 pnpm test
 
-# 浏览器 E2E 测试 (Playwright, Chromium, 92 个)
+# 浏览器 E2E 测试 (Playwright, Chromium)
 # 该套件同时覆盖数据面与 RPC 控制面：测试服务器在第二个端口上运行真实的
 # EventServer（/api/rpc/，由 Vite 代理），浏览器因此可以真实地跑通发现、
 # $sub/$unsub/$publish、定向推送，以及带 Last-Event-ID 重放的重连。
@@ -29,7 +29,7 @@ pnpm test
 # 于是「服务端宣告关闭」这条路径也在浏览器里得到验证。
 pnpm test:e2e
 
-# 浏览器示例应用 (examples/browser-e2e，58 项检查)
+# 浏览器示例应用 (examples/browser-e2e)
 pnpm test:examples
 
 # 单元测试重复 3 轮（vitest --repeats）—— 抖动检查（CI 会跑这一项）

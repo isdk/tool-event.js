@@ -393,7 +393,9 @@ against a silent server simply never sees one.
 
 Electron needs no switch: `@isdk/tool-electron` announces the same event on its own
 `pubsub-close:{namespace}` channel, always, because the channel namespace already keeps it
-out of the application's event names. The names and reasons are defined once, in
+out of the application's event names — and it isolates sessions too: a window connected to
+two namespaces receives one notice per namespace, and each one ends only that namespace's
+streams. The names and reasons are defined once, in
 `transports/pubsub/close` (`PubSubCloseEvent`, `PubSubSessionCloseReason`,
 `PubSubStreamRegistry`) — a transport decides only how the notice travels, not what it says.
 
@@ -469,8 +471,9 @@ const pubSubNamespace = 'electron://my-app-events';
 // transport that has already derived (missing) channels.
 const pubsub = new ElectronClientPubSubTransport(pubSubNamespace);
 
-// 3. Open the stream and listen.
-const stream = pubsub.connect(pubsubNamespace);
+// 3. Open the stream and listen. The first argument is a logical connection name:
+// the IPC channels come from the namespace given to the constructor, not from it.
+const stream = pubsub.connect('events');
 
 stream.on('server-tick', (data) => {
   console.log('Received tick from main process:', data);
@@ -847,6 +850,10 @@ export interface PubSubServerSession {
   clientId?: PubSubClientId;
   /** Protocol of this session, e.g. 'sse', 'ws', 'ipc', 'electron'. */
   protocol: 'sse' | 'ws' | 'ipc' | string;
+  /** The identity the RPC transport's policy resolved for the request that opened this
+   *  session (`ctx.identity`), when a policy is installed. Key the transport's own
+   *  bookkeeping on this, never on a request-supplied id. */
+  identity?: RpcIdentity;
   /** Sends an event and data to this session's client. */
   send: (event: string, data: any, ctx?: PubSubCtx) => void;
   /** Closes this session's connection. */
@@ -876,8 +883,14 @@ export interface IPubSubServerTransport {
     options?: {
       req: any; // e.g., http.IncomingMessage
       res: any; // e.g., http.ServerResponse
+      /** @deprecated Self-reported id; never adopted. Use `identity`. */
       clientId?: string;
       events?: string[];
+      /** The session this request belongs to, as decided by the RPC transport's
+       *  `RpcIdentityPolicy` (`ctx.identity` on the call that opened the stream).
+       *  `EventServer.list` refuses the stream without it, so a transport can treat
+       *  it as required — that is what makes `getSessionFromIdentity` trustworthy. */
+      identity?: RpcIdentity;
       [k: string]: any;
     }
   ) => PubSubServerSession;
@@ -978,6 +991,11 @@ interface PubSubClientStream {
    *  against the session the server issued — never against an id the client picked. */
   clientId: string;
 
+  /** Optional. The resume credential the server handed back in `welcome`, if it issues
+   *  one. `EventClient` puts it on the RPC calls that follow, so the control plane
+   *  resolves the same session the stream was given. */
+  sessionToken?: string;
+
   /** Required. Protocol of this stream ('sse', 'ws', 'ipc', 'electron', …).
    *  It is what the regex-unsupported warning names. */
   protocol: 'sse' | 'ws' | 'ipc' | string;
@@ -985,6 +1003,12 @@ interface PubSubClientStream {
   /** Optional. 0 connecting, 1 open, 2 closed. `EventClient` treats 2 as closed and
    *  re-opens the stream on demand. */
   readyState?: number;
+
+  /** Optional. Why the server ended this stream's session, once it has said so (see
+   *  `PubSubSessionCloseReason`). Absent when the stream closed locally, or when the
+   *  transport does not announce closes — on SSE that is the default until
+   *  `closeSignal` is enabled on both ends. */
+  closeReason?: PubSubSessionCloseReason;
 
   // ...on / off / close
 
@@ -1043,9 +1067,14 @@ Three do **not**, and are the transport's own responsibility:
   transport can tell the client its session is over, or that client's stream sits at
   `readyState === 1` and keeps sending into a session that no longer exists. The vocabulary
   is shared — `PubSubCloseEvent`, `PubSubSessionCloseReason` — and so is the client-side
-  fan-out: `PubSubStreamRegistry` holds every stream one client transport owns, so a single
-  notice closes all of them. What each transport supplies is only the wire: its own channel
-  (Electron's `pubsub-close:{ns}`, always) or a frame on the stream (SSE's `$close`, opt-in).
+  fan-out: `PubSubStreamRegistry` holds every stream sharing one session, so a single notice
+  closes all of them. One registry per session, not per transport: a client transport that
+  serves several namespaces (Electron's, after a mid-life `setApiRoot()`) holds several
+  sessions on one window, and a notice for one of them must not close the others — nor have
+  their streams' `close()` charged against them, which would leave those sessions' stream
+  counts unreleasable on the server. What each transport supplies is only the wire: its own
+  channel (Electron's `pubsub-close:{ns}`, always) or a frame on the stream (SSE's `$close`,
+  opt-in).
 
 ### When no transport is set
 

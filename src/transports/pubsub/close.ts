@@ -12,7 +12,9 @@
  *
  * - **Electron** (`@isdk/tool-electron`): its own IPC channel,
  *   `pubsub-close:{namespace}`. The channel namespace isolates it from application
- *   event names, so the bare `close` is safe there.
+ *   event names, so the bare `close` is safe there — and it isolates sessions too:
+ *   a window connected to two namespaces gets one notice per namespace, and each
+ *   notice ends only that namespace's streams.
  * - **SSE** (`SseServerPubSubTransport`): a frame on the stream itself, named
  *   {@link SSE_CLOSE_EVENT}. SSE has no separate channel, so the frame shares the
  *   application's event namespace and needs the control-plane `$` prefix that
@@ -62,8 +64,11 @@ export const SSE_CLOSE_EVENT = `${SSE_CONTROL_EVENT_PREFIX}${PubSubCloseEvent}`
  * - `server` — application code called `session.close()`.
  * - `navigation` — the client's document/context was replaced (a renderer reload,
  *   a main-frame navigation), which destroys its streams without any goodbye.
- * - `client-gone` — the client endpoint vanished (window destroyed, renderer
- *   process gone, socket closed).
+ * - `client-gone` — the client endpoint vanished, generically. A transport that can
+ *   tell the cases apart names them itself (Electron: `window-destroyed` and
+ *   `renderer-gone`); one that cannot tell a vanished client from a dropped
+ *   connection does not announce it at all (SSE: a drop is resumable, so it is not
+ *   a close).
  * - `transport-cleanup` — the server transport itself was torn down while the
  *   session was still live.
  *
@@ -92,18 +97,24 @@ export type PubSubCloseNotice = {
 export type PubSubStreamTeardown = (notifyPeer: boolean) => void
 
 /**
- * Every stream one client transport holds, so a session-level close can close them
- * all at once and transport teardown can release them too.
+ * Every stream sharing one peer session, so a session-level close can close them all
+ * at once and transport teardown can release them too.
  *
- * Streams of a transport usually share one peer session (one `WebContents`, one
- * SSE stream per `connect()`), so the notice arrives once and applies to all of
- * them. Keeping the set here rather than in each transport is what stops the two
- * ends from drifting apart: a transport that forgets one stream leaves a renderer
- * whose `readyState` still says OPEN.
- *   * A teardown is expected to be idempotent (guard on its own closed state): a later
-   * `stream.close()` reaches it again, and a teardown that unregisters itself races
-   * nothing, because {@link closeAll} already dropped it.
-   */
+ * One registry per session, not one per transport. Streams of one session usually
+ * share a peer (one `WebContents`, one SSE stream per `connect()`), so the notice
+ * arrives once and applies to all of them — but a client transport that serves more
+ * than one namespace (`ElectronClientPubSubTransport` after a mid-life
+ * `setApiRoot()`) holds several sessions on one window, and keeps a registry per
+ * namespace: a notice for one session must not close the others, and closing their
+ * streams on its behalf would leave the peer's count for those sessions unreleasable.
+ * Keeping the set here rather than in each transport is what stops the two ends from
+ * drifting apart: a transport that forgets one stream leaves a renderer whose
+ * `readyState` still says OPEN.
+ *
+ * A teardown is expected to be idempotent (guard on its own closed state): a later
+ * `stream.close()` reaches it again, and a teardown that unregisters itself races
+ * nothing, because {@link closeAll} already dropped it.
+ */
 export class PubSubStreamRegistry {
   private teardowns = new Set<PubSubStreamTeardown>()
 

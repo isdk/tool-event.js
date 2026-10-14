@@ -140,6 +140,12 @@ export interface IPubSubClientTransport {
    * Optional. Configures the transport with a base URL.
    * If implemented, this allows the transport to resolve relative paths
    * passed to the `connect` method.
+   *
+   * It applies to the connections made after it: a stream keeps the endpoint it was
+   * created with, so switching mid-life leaves live streams on the old one (on
+   * Electron that also means their own channels, listeners and close notice — each
+   * namespace is a separate session there).
+   *
    * @param apiRoot The base URL for the API.
    */
   setApiRoot?: (apiRoot: string) => void;
